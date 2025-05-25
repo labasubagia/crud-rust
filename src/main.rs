@@ -4,34 +4,29 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use axum::{
-    Extension, Json,
-    extract::State,
-    http::StatusCode,
-    routing::{get, post, put},
-};
+use axum::{Extension, Json, extract::State, http::StatusCode, routing::get};
 use serde::{Deserialize, Serialize};
 use serde_json::{self, json};
 use tokio::net::TcpListener;
 use tracing::{Level, info};
 use tracing_subscriber::FmtSubscriber;
-use uuid::Uuid;
 
 mod middleware;
 use middleware::{CorrelationId, request_middleware};
 
-struct Config {
-    app_name: String,
+mod items;
+use items::Item;
 
-    host: IpAddr,
-    port: u16,
+pub struct Config {
+    pub app_name: String,
+    pub host: IpAddr,
+    pub port: u16,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Config {
             app_name: "my_app".into(),
-
             host: Ipv4Addr::new(0, 0, 0, 0).into(),
             port: 3000,
         }
@@ -43,7 +38,6 @@ impl Config {
         let default = Self::default();
 
         let app_name = env::var("APP_NAME").unwrap_or(default.app_name);
-
         let host = env::var("HOST")
             .unwrap_or(default.host.to_string())
             .parse::<IpAddr>()
@@ -65,15 +59,9 @@ impl Config {
     }
 }
 
-#[derive(Serialize, Clone)]
-struct Item {
-    id: String,
-    name: String,
-}
-
-struct AppState {
-    config: Config,
-    items: Mutex<Vec<Item>>,
+pub struct AppState {
+    pub config: Config,
+    pub items: Mutex<Vec<Item>>,
 }
 
 impl Default for AppState {
@@ -121,29 +109,22 @@ async fn main() {
 }
 
 fn setup_app(app_state: Arc<AppState>) -> axum::Router {
+    use items::router_setup as items_router_setup;
+
     axum::Router::new()
         .route("/", get(handler_index))
         .route("/api/healthcheck", get(handler_healthcheck))
-        .route(
-            "/api/items",
-            post(handler_create_item).get(handler_list_items),
-        )
-        .route(
-            "/api/items/{id}",
-            put(handler_update_item)
-                .get(handler_get_item)
-                .delete(handler_delete_item),
-        )
+        .nest("/api/items", items_router_setup())
         .layer(axum::middleware::from_fn(request_middleware))
         .with_state(app_state)
 }
 
 #[derive(Serialize, Deserialize)]
-struct Response<T> {
-    correlation_id: String,
-    message: String,
-    error: String,
-    data: Option<T>,
+pub struct Response<T> {
+    pub correlation_id: String,
+    pub message: String,
+    pub error: String,
+    pub data: Option<T>,
 }
 
 async fn handler_index(
@@ -188,256 +169,6 @@ async fn handler_healthcheck(
             data: None,
         })),
     )
-}
-
-#[derive(Serialize, Deserialize)]
-struct CreateItem {
-    name: String,
-}
-
-async fn handler_list_items(
-    State(app_state): State<Arc<AppState>>,
-    Extension(correlation_id): Extension<CorrelationId>,
-) -> (StatusCode, Json<serde_json::Value>) {
-    let items = match app_state.items.lock() {
-        Ok(items) => items.to_vec(),
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!(Response::<serde_json::Value> {
-                    correlation_id,
-                    message: "failed to aqcuire lock".into(),
-                    error: format!("cannot aqcuire lock: {}", e),
-                    data: None,
-                })),
-            );
-        }
-    };
-
-    (
-        StatusCode::OK,
-        Json(json!(Response::<Vec<Item>> {
-            correlation_id: "".into(),
-            message: "ok".into(),
-            error: "".into(),
-            data: Some(items),
-        })),
-    )
-}
-
-async fn handler_create_item(
-    State(app_state): State<Arc<AppState>>,
-    Extension(correlation_id): Extension<CorrelationId>,
-    Json(payload): Json<CreateItem>,
-) -> (StatusCode, Json<serde_json::Value>) {
-    let name = payload.name.trim().to_lowercase();
-    if name.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!(Response::<serde_json::Value> {
-                correlation_id,
-                message: "Item name cannot be empty".into(),
-                error: "Invalid input".into(),
-                data: None,
-            })),
-        );
-    }
-
-    match app_state.items.lock() {
-        Ok(mut items) => {
-            let cur = items.iter().find(|item| item.name == name);
-            match cur {
-                Some(item) => (
-                    StatusCode::OK,
-                    Json(json!(Response::<Item> {
-                        correlation_id,
-                        message: format!("Item '{}' already exists", payload.name),
-                        error: "".into(),
-                        data: Some(item.clone()),
-                    })),
-                ),
-                None => {
-                    let new_item = Item {
-                        id: Uuid::new_v4().to_string(),
-                        name,
-                    };
-                    items.push(new_item.clone());
-                    (
-                        StatusCode::CREATED,
-                        Json(json!(Response::<Item> {
-                            correlation_id,
-                            message: format!("Created item '{}'", payload.name),
-                            error: "".into(),
-                            data: Some(new_item),
-                        })),
-                    )
-                }
-            }
-        }
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!(Response::<serde_json::Value> {
-                correlation_id,
-                message: "Failed to process request".into(),
-                error: format!("cannot aqcuire lock: {}", e),
-                data: None,
-            })),
-        ),
-    }
-}
-
-async fn handler_get_item(
-    State(app_state): State<Arc<AppState>>,
-    Extension(correlation_id): Extension<CorrelationId>,
-    axum::extract::Path(id): axum::extract::Path<String>,
-) -> (StatusCode, Json<serde_json::Value>) {
-    match app_state.items.lock() {
-        Ok(items) => {
-            let item = items.iter().find(|item| item.id == id).cloned();
-            match item {
-                Some(item) => (
-                    StatusCode::OK,
-                    Json(json!(Response::<Item> {
-                        correlation_id,
-                        message: "ok".into(),
-                        error: "".into(),
-                        data: Some(item),
-                    })),
-                ),
-                None => (
-                    StatusCode::NOT_FOUND,
-                    Json(json!(Response::<Item> {
-                        correlation_id,
-                        message: format!("item with id {} not found", id),
-                        error: "".into(),
-                        data: None,
-                    })),
-                ),
-            }
-        }
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!(Response::<serde_json::Value> {
-                correlation_id,
-                message: "something went wrong".into(),
-                error: format!("cannot aqcuire lock: {}", e),
-                data: None,
-            })),
-        ),
-    }
-}
-
-#[derive(Serialize, Deserialize)]
-struct UpdateItem {
-    name: String,
-}
-
-async fn handler_update_item(
-    State(app_state): State<Arc<AppState>>,
-    Extension(correlation_id): Extension<CorrelationId>,
-    axum::extract::Path(id): axum::extract::Path<String>,
-    Json(payload): Json<UpdateItem>,
-) -> (StatusCode, Json<serde_json::Value>) {
-    let name = payload.name.trim().to_lowercase();
-    if name.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!(Response::<serde_json::Value> {
-                correlation_id,
-                message: "Item name cannot be empty".into(),
-                error: "Invalid input".into(),
-                data: None,
-            })),
-        );
-    }
-
-    match app_state.items.lock() {
-        Ok(mut items) => {
-            let index = match items.iter().position(|item| item.id == id) {
-                Some(index) => index,
-                None => {
-                    return (
-                        StatusCode::NOT_FOUND,
-                        Json(json!(Response::<serde_json::Value> {
-                            correlation_id,
-                            message: format!("item with id {} not found", id),
-                            error: "".into(),
-                            data: None,
-                        })),
-                    );
-                }
-            };
-            let cur = match items.get(index) {
-                Some(item) => item.clone(),
-                None => {
-                    return (
-                        StatusCode::NOT_FOUND,
-                        Json(json!(Response::<serde_json::Value> {
-                            correlation_id,
-                            message: format!("item with id {} not found", id),
-                            error: "".into(),
-                            data: None,
-                        })),
-                    );
-                }
-            };
-
-            let updated_item = Item { name, ..cur };
-            items[index] = updated_item.clone();
-            (
-                StatusCode::OK,
-                Json(json!(Response::<Item> {
-                    correlation_id,
-                    message: format!("Updated item '{}' with id {}", payload.name, id),
-                    error: "".into(),
-                    data: Some(updated_item),
-                })),
-            )
-        }
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!(Response::<serde_json::Value> {
-                correlation_id,
-                message: "something went wrong".into(),
-                error: format!("cannot aqcuire lock: {}", e),
-                data: None,
-            })),
-        ),
-    }
-}
-
-async fn handler_delete_item(
-    State(app_state): State<Arc<AppState>>,
-    Extension(correlation_id): Extension<CorrelationId>,
-    axum::extract::Path(id): axum::extract::Path<String>,
-) -> (StatusCode, Json<serde_json::Value>) {
-    match app_state.items.lock() {
-        Ok(mut items) => {
-            *items = items
-                .clone()
-                .into_iter()
-                .filter(|item| item.id != id)
-                .collect();
-            (
-                StatusCode::OK,
-                Json(json!(Response::<serde_json::Value> {
-                    correlation_id,
-                    message: format!("Deleted item with id {}", id),
-                    error: "".into(),
-                    data: None,
-                })),
-            )
-        }
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!(Response::<serde_json::Value> {
-                correlation_id,
-                message: "something went wrong".into(),
-                error: format!("cannot aqcuire lock: {}", e),
-                data: None,
-            })),
-        ),
-    }
 }
 
 #[cfg(test)]
@@ -524,250 +255,5 @@ mod tests {
         assert_eq!(json["message"], "ok");
         assert_eq!(json["error"], "");
         assert_eq!(json["data"], serde_json::Value::Null);
-    }
-
-    #[tokio::test]
-    async fn test_create_item_handler() {
-        let app_state = Arc::new(AppState::default());
-        let app = setup_app(app_state.clone());
-
-        let new_item = CreateItem {
-            name: "test item".into(),
-        };
-
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/items")
-                    .header("Content-Type", "application/json")
-                    .body(axum::body::Body::from(
-                        serde_json::to_string(&new_item).unwrap(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::CREATED);
-
-        let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
-            .await
-            .unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-
-        assert_eq!(json["message"], format!("Created item '{}'", new_item.name));
-        assert_eq!(json["error"], "");
-        assert_eq!(json["data"]["name"], new_item.name);
-        assert_eq!((&app_state).items.lock().unwrap().len(), 1);
-        assert_eq!((&app_state).items.lock().unwrap()[0].name, new_item.name);
-    }
-
-    #[tokio::test]
-    async fn test_list_items_handler() {
-        let app_state = Arc::new(AppState {
-            config: Config::default(),
-            items: Mutex::new(vec![
-                Item {
-                    id: "1".into(),
-                    name: "item 1".into(),
-                },
-                Item {
-                    id: "2".into(),
-                    name: "item 2".into(),
-                },
-            ]),
-        });
-        let app = setup_app(app_state.clone());
-
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/api/items")
-                    .body(axum::body::Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
-
-        let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
-            .await
-            .unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-
-        assert_eq!(json["message"], "ok");
-        assert_eq!(json["error"], "");
-        assert_eq!(
-            json["data"].as_array().unwrap().len(),
-            app_state.items.lock().unwrap().len()
-        );
-    }
-
-    #[tokio::test]
-    async fn test_get_item_handler_ok() {
-        let item_id = "1";
-
-        let app_state = Arc::new(AppState {
-            config: Config::default(),
-            items: Mutex::new(vec![Item {
-                id: item_id.into(),
-                name: "test item".into(),
-            }]),
-        });
-        let app = setup_app(app_state.clone());
-
-        // Test successful get
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(format!("/api/items/{}", item_id))
-                    .body(axum::body::Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
-
-        let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
-            .await
-            .unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-
-        assert_eq!(json["message"], "ok");
-        assert_eq!(json["error"], "");
-        assert_eq!(json["data"]["id"], item_id);
-        assert_eq!(json["data"]["name"], "test item");
-    }
-
-    #[tokio::test]
-    async fn test_get_item_handler_not_found() {
-        let item_id = "nonexistent_id";
-
-        let app_state = Arc::new(AppState {
-            config: Config::default(),
-            items: Mutex::new(vec![Item {
-                id: "1".into(),
-                name: "test item".into(),
-            }]),
-        });
-        let app = setup_app(app_state.clone());
-
-        // Test item not found
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .uri(format!("/api/items/{}", item_id))
-                    .body(axum::body::Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
-
-        let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
-            .await
-            .unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-
-        assert_eq!(
-            json["message"],
-            format!("item with id {} not found", item_id)
-        );
-        assert_eq!(json["error"], "");
-        assert_eq!(json["data"], serde_json::Value::Null);
-    }
-
-    #[tokio::test]
-    async fn test_update_item_handler() {
-        let item_id = "1";
-
-        let app_state = Arc::new(AppState {
-            config: Config::default(),
-            items: Mutex::new(vec![Item {
-                id: item_id.into(),
-                name: "old item".into(),
-            }]),
-        });
-        let app = setup_app(app_state.clone());
-
-        let updated_item = UpdateItem {
-            name: "updated item".into(),
-        };
-
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .method("PUT")
-                    .uri(format!("/api/items/{}", item_id))
-                    .header("Content-Type", "application/json")
-                    .body(axum::body::Body::from(
-                        serde_json::to_string(&updated_item).unwrap(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
-
-        let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
-            .await
-            .unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-
-        assert_eq!(
-            json["message"],
-            format!("Updated item '{}' with id {}", updated_item.name, item_id)
-        );
-        assert_eq!(json["error"], "");
-        assert_eq!(json["data"]["id"], item_id);
-        assert_eq!(json["data"]["name"], updated_item.name);
-        assert_eq!((&app_state).items.lock().unwrap().len(), 1);
-        assert_eq!(
-            (&app_state).items.lock().unwrap()[0].name,
-            updated_item.name
-        );
-    }
-
-    #[tokio::test]
-    async fn test_handler_delete_item() {
-        let item_id = "1";
-
-        let app_state = Arc::new(AppState {
-            config: Config::default(),
-            items: Mutex::new(vec![Item {
-                id: item_id.into(),
-                name: "test item".into(),
-            }]),
-        });
-        let app = setup_app(app_state.clone());
-
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .method("DELETE")
-                    .uri(format!("/api/items/{}", item_id))
-                    .body(axum::body::Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
-
-        let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
-            .await
-            .unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-
-        assert_eq!(json["message"], format!("Deleted item with id {}", item_id));
-        assert_eq!(json["error"], "");
-        assert_eq!(json["data"], serde_json::Value::Null);
-        assert_eq!((&app_state).items.lock().unwrap().len(), 0);
     }
 }
