@@ -21,3 +21,55 @@ pub async fn request_middleware(mut request: Request, next: Next) -> Response {
     );
     response
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{
+        Router,
+        body::Body,
+        http::{Request as HttpRequest, StatusCode},
+        middleware::from_fn,
+        routing::get,
+    };
+    use tower::ServiceExt;
+
+    async fn handler() -> StatusCode {
+        StatusCode::OK
+    }
+
+    #[tokio::test]
+    async fn test_middleware_adds_correlation_id_when_not_present() {
+        let app = Router::new()
+            .route("/", get(handler))
+            .layer(from_fn(request_middleware));
+
+        let req = HttpRequest::builder().uri("/").body(Body::empty()).unwrap();
+
+        let res = app.oneshot(req).await.unwrap();
+
+        assert!(res.headers().contains_key(X_CORRELATION_ID));
+        let correlation_id = res.headers().get(X_CORRELATION_ID).unwrap();
+        assert!(Uuid::parse_str(correlation_id.to_str().unwrap()).is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_middleware_preserves_existing_correlation_id() {
+        let app = Router::new()
+            .route("/", get(handler))
+            .layer(from_fn(request_middleware));
+
+        let correlation_id = "test-correlation-id";
+        let req = HttpRequest::builder()
+            .uri("/")
+            .header(X_CORRELATION_ID, correlation_id)
+            .body(Body::empty())
+            .unwrap();
+
+        let res = app.oneshot(req).await.unwrap();
+
+        assert!(res.headers().contains_key(X_CORRELATION_ID));
+        let response_correlation_id = res.headers().get(X_CORRELATION_ID).unwrap();
+        assert_eq!(response_correlation_id.to_str().unwrap(), correlation_id);
+    }
+}
