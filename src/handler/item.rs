@@ -2,11 +2,11 @@ use axum::{Extension, Json, extract::State, http::StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::Arc;
-use uuid::Uuid;
 
 use crate::middleware::CorrelationId;
 use crate::model::{http::Response, item::Item};
-use crate::state::AppState;
+use crate::repository::item::ItemRepository;
+use crate::service::item::ItemService;
 
 #[derive(Serialize, Deserialize)]
 struct CreateItem {
@@ -18,7 +18,10 @@ struct UpdateItem {
     pub name: String,
 }
 
-pub fn router_setup_items() -> axum::Router<Arc<AppState>> {
+pub fn router_setup_items<R>() -> axum::Router<Arc<ItemService<R>>>
+where
+    R: ItemRepository + 'static,
+{
     axum::Router::new()
         .route("/", axum::routing::get(list_items).post(create_item))
         .route(
@@ -29,240 +32,150 @@ pub fn router_setup_items() -> axum::Router<Arc<AppState>> {
         )
 }
 
-async fn list_items(
-    State(app_state): State<Arc<AppState>>,
+async fn list_items<R>(
+    State(service): State<Arc<ItemService<R>>>,
     Extension(correlation_id): Extension<CorrelationId>,
-) -> (StatusCode, Json<serde_json::Value>) {
-    let items = match app_state.items.lock() {
-        Ok(items) => items.to_vec(),
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!(Response::<serde_json::Value> {
-                    correlation_id,
-                    message: "failed to aqcuire lock".into(),
-                    error: format!("cannot aqcuire lock: {}", e),
-                    data: None,
-                })),
-            );
-        }
-    };
-
-    (
-        StatusCode::OK,
-        Json(json!(Response::<Vec<Item>> {
-            correlation_id: "".into(),
-            message: "ok".into(),
-            error: "".into(),
-            data: Some(items),
-        })),
-    )
+) -> (StatusCode, Json<serde_json::Value>)
+where
+    R: ItemRepository,
+{
+    match service.list().await {
+        Ok(items) => (
+            StatusCode::OK,
+            Json(json!(Response::<Vec<Item>> {
+                correlation_id,
+                message: "ok".into(),
+                error: "".into(),
+                data: Some(items),
+            })),
+        ),
+        Err(e) => (
+            e.get_http_status(),
+            Json(json!(Response::<serde_json::Value> {
+                correlation_id,
+                message: e.get_message(),
+                error: e.get_error(),
+                data: None,
+            })),
+        ),
+    }
 }
 
-async fn create_item(
-    State(app_state): State<Arc<AppState>>,
+async fn create_item<R>(
+    State(service): State<Arc<ItemService<R>>>,
     Extension(correlation_id): Extension<CorrelationId>,
     Json(payload): Json<CreateItem>,
-) -> (StatusCode, Json<serde_json::Value>) {
-    let name = payload.name.trim().to_lowercase();
-    if name.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!(Response::<serde_json::Value> {
+) -> (StatusCode, Json<serde_json::Value>)
+where
+    R: ItemRepository,
+{
+    match service.create(payload.name).await {
+        Ok(item) => (
+            StatusCode::CREATED,
+            Json(json!(Response::<Item> {
                 correlation_id,
-                message: "Item name cannot be empty".into(),
-                error: "Invalid input".into(),
-                data: None,
+                message: format!("Created item '{}'", item.name),
+                error: "".into(),
+                data: Some(item),
             })),
-        );
-    }
-
-    match app_state.items.lock() {
-        Ok(mut items) => {
-            let cur = items.iter().find(|item| item.name == name);
-            match cur {
-                Some(item) => (
-                    StatusCode::OK,
-                    Json(json!(Response::<Item> {
-                        correlation_id,
-                        message: format!("Item '{}' already exists", payload.name),
-                        error: "".into(),
-                        data: Some(item.clone()),
-                    })),
-                ),
-                None => {
-                    let new_item = Item {
-                        id: Uuid::new_v4().to_string(),
-                        name,
-                    };
-                    items.push(new_item.clone());
-                    (
-                        StatusCode::CREATED,
-                        Json(json!(Response::<Item> {
-                            correlation_id,
-                            message: format!("Created item '{}'", payload.name),
-                            error: "".into(),
-                            data: Some(new_item),
-                        })),
-                    )
-                }
-            }
-        }
+        ),
         Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
+            e.get_http_status(),
             Json(json!(Response::<serde_json::Value> {
                 correlation_id,
-                message: "Failed to process request".into(),
-                error: format!("cannot aqcuire lock: {}", e),
+                message: e.get_message(),
+                error: e.get_error(),
                 data: None,
             })),
         ),
     }
 }
 
-async fn get_item(
-    State(app_state): State<Arc<AppState>>,
+async fn get_item<R>(
+    State(service): State<Arc<ItemService<R>>>,
     Extension(correlation_id): Extension<CorrelationId>,
     axum::extract::Path(id): axum::extract::Path<String>,
-) -> (StatusCode, Json<serde_json::Value>) {
-    match app_state.items.lock() {
-        Ok(items) => {
-            let item = items.iter().find(|item| item.id == id).cloned();
-            match item {
-                Some(item) => (
-                    StatusCode::OK,
-                    Json(json!(Response::<Item> {
-                        correlation_id,
-                        message: "ok".into(),
-                        error: "".into(),
-                        data: Some(item),
-                    })),
-                ),
-                None => (
-                    StatusCode::NOT_FOUND,
-                    Json(json!(Response::<Item> {
-                        correlation_id,
-                        message: format!("item with id {} not found", id),
-                        error: "".into(),
-                        data: None,
-                    })),
-                ),
-            }
-        }
+) -> (StatusCode, Json<serde_json::Value>)
+where
+    R: ItemRepository,
+{
+    match service.get(id).await {
+        Ok(item) => (
+            StatusCode::OK,
+            Json(json!(Response::<Item> {
+                correlation_id,
+                message: "ok".into(),
+                error: "".into(),
+                data: Some(item),
+            })),
+        ),
         Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
+            e.get_http_status(),
             Json(json!(Response::<serde_json::Value> {
                 correlation_id,
-                message: "something went wrong".into(),
-                error: format!("cannot aqcuire lock: {}", e),
+                message: e.get_message(),
+                error: e.get_error(),
                 data: None,
             })),
         ),
     }
 }
 
-async fn update_item(
-    State(app_state): State<Arc<AppState>>,
+async fn update_item<R>(
+    State(service): State<Arc<ItemService<R>>>,
     Extension(correlation_id): Extension<CorrelationId>,
     axum::extract::Path(id): axum::extract::Path<String>,
     Json(payload): Json<UpdateItem>,
-) -> (StatusCode, Json<serde_json::Value>) {
-    let name = payload.name.trim().to_lowercase();
-    if name.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!(Response::<serde_json::Value> {
+) -> (StatusCode, Json<serde_json::Value>)
+where
+    R: ItemRepository,
+{
+    match service.update(id, payload.name.clone()).await {
+        Ok(item) => (
+            StatusCode::OK,
+            Json(json!(Response::<Item> {
                 correlation_id,
-                message: "Item name cannot be empty".into(),
-                error: "Invalid input".into(),
-                data: None,
+                message: format!("Updated item '{}' with id {}", item.name, item.id),
+                error: "".into(),
+                data: Some(item),
             })),
-        );
-    }
-
-    match app_state.items.lock() {
-        Ok(mut items) => {
-            let index = match items.iter().position(|item| item.id == id) {
-                Some(index) => index,
-                None => {
-                    return (
-                        StatusCode::NOT_FOUND,
-                        Json(json!(Response::<serde_json::Value> {
-                            correlation_id,
-                            message: format!("item with id {} not found", id),
-                            error: "".into(),
-                            data: None,
-                        })),
-                    );
-                }
-            };
-            let cur = match items.get(index) {
-                Some(item) => item.clone(),
-                None => {
-                    return (
-                        StatusCode::NOT_FOUND,
-                        Json(json!(Response::<serde_json::Value> {
-                            correlation_id,
-                            message: format!("item with id {} not found", id),
-                            error: "".into(),
-                            data: None,
-                        })),
-                    );
-                }
-            };
-
-            let updated_item = Item { name, ..cur };
-            items[index] = updated_item.clone();
-            (
-                StatusCode::OK,
-                Json(json!(Response::<Item> {
-                    correlation_id,
-                    message: format!("Updated item '{}' with id {}", payload.name, id),
-                    error: "".into(),
-                    data: Some(updated_item),
-                })),
-            )
-        }
+        ),
         Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
+            e.get_http_status(),
             Json(json!(Response::<serde_json::Value> {
                 correlation_id,
-                message: "something went wrong".into(),
-                error: format!("cannot aqcuire lock: {}", e),
+                message: e.get_message(),
+                error: e.get_error(),
                 data: None,
             })),
         ),
     }
 }
 
-async fn delete_item(
-    State(app_state): State<Arc<AppState>>,
+async fn delete_item<R>(
+    State(service): State<Arc<ItemService<R>>>,
     Extension(correlation_id): Extension<CorrelationId>,
     axum::extract::Path(id): axum::extract::Path<String>,
-) -> (StatusCode, Json<serde_json::Value>) {
-    match app_state.items.lock() {
-        Ok(mut items) => {
-            *items = items
-                .clone()
-                .into_iter()
-                .filter(|item| item.id != id)
-                .collect();
-            (
-                StatusCode::OK,
-                Json(json!(Response::<serde_json::Value> {
-                    correlation_id,
-                    message: format!("Deleted item with id {}", id),
-                    error: "".into(),
-                    data: None,
-                })),
-            )
-        }
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
+) -> (StatusCode, Json<serde_json::Value>)
+where
+    R: ItemRepository,
+{
+    match service.delete(id.clone()).await {
+        Ok(_) => (
+            StatusCode::OK,
             Json(json!(Response::<serde_json::Value> {
                 correlation_id,
-                message: "something went wrong".into(),
-                error: format!("cannot aqcuire lock: {}", e),
+                message: format!("Deleted item with id {}", id),
+                error: "".into(),
+                data: None,
+            })),
+        ),
+        Err(e) => (
+            e.get_http_status(),
+            Json(json!(Response::<serde_json::Value> {
+                correlation_id,
+                message: e.get_message(),
+                error: e.get_error(),
                 data: None,
             })),
         ),
@@ -274,21 +187,24 @@ mod tests {
     use super::*;
     use crate::config::Config;
     use crate::middleware;
+    use crate::repository::item::InMemoryItemRepository;
     use axum::http::Request;
     use std::sync::Mutex;
     use tower::ServiceExt;
 
-    fn setup_app(app_state: Arc<AppState>) -> axum::Router {
+    fn setup_app(service: Arc<ItemService<InMemoryItemRepository>>) -> axum::Router {
         axum::Router::new()
             .nest("/api/items", router_setup_items())
             .layer(axum::middleware::from_fn(middleware::request_middleware))
-            .with_state(app_state)
+            .with_state(service)
     }
 
     #[tokio::test]
     async fn test_create_item() {
-        let app_state = Arc::new(AppState::default());
-        let app = setup_app(app_state.clone());
+        let config = Arc::new(Config::default());
+        let repo = Arc::new(InMemoryItemRepository::new());
+        let service = Arc::new(ItemService::new(config, repo.clone()));
+        let app = setup_app(service.clone());
 
         let new_item = CreateItem {
             name: "test item".into(),
@@ -318,14 +234,14 @@ mod tests {
         assert_eq!(json["message"], format!("Created item '{}'", new_item.name));
         assert_eq!(json["error"], "");
         assert_eq!(json["data"]["name"], new_item.name);
-        assert_eq!((&app_state).items.lock().unwrap().len(), 1);
-        assert_eq!((&app_state).items.lock().unwrap()[0].name, new_item.name);
+        assert_eq!((&repo).items.lock().unwrap().len(), 1);
+        assert_eq!((&repo).items.lock().unwrap()[0].name, new_item.name);
     }
 
     #[tokio::test]
     async fn test_list_items() {
-        let app_state = Arc::new(AppState {
-            config: Config::default(),
+        let config = Arc::new(Config::default());
+        let repo = Arc::new(InMemoryItemRepository {
             items: Mutex::new(vec![
                 Item {
                     id: "1".into(),
@@ -337,7 +253,8 @@ mod tests {
                 },
             ]),
         });
-        let app = setup_app(app_state.clone());
+        let service = Arc::new(ItemService::new(config, repo.clone()));
+        let app = setup_app(service.clone());
 
         let response = app
             .oneshot(
@@ -360,7 +277,7 @@ mod tests {
         assert_eq!(json["error"], "");
         assert_eq!(
             json["data"].as_array().unwrap().len(),
-            app_state.items.lock().unwrap().len()
+            repo.items.lock().unwrap().len()
         );
     }
 
@@ -368,14 +285,15 @@ mod tests {
     async fn test_get_item_ok() {
         let item_id = "1";
 
-        let app_state = Arc::new(AppState {
-            config: Config::default(),
+        let config = Arc::new(Config::default());
+        let repo = Arc::new(InMemoryItemRepository {
             items: Mutex::new(vec![Item {
                 id: item_id.into(),
                 name: "test item".into(),
             }]),
         });
-        let app = setup_app(app_state.clone());
+        let service = Arc::new(ItemService::new(config, repo.clone()));
+        let app = setup_app(service.clone());
 
         // Test successful get
         let response = app
@@ -406,14 +324,15 @@ mod tests {
     async fn test_get_item_not_found() {
         let item_id = "nonexistent_id";
 
-        let app_state = Arc::new(AppState {
-            config: Config::default(),
+        let config = Arc::new(Config::default());
+        let repo = Arc::new(InMemoryItemRepository {
             items: Mutex::new(vec![Item {
                 id: "1".into(),
                 name: "test item".into(),
             }]),
         });
-        let app = setup_app(app_state.clone());
+        let service = Arc::new(ItemService::new(config, repo.clone()));
+        let app = setup_app(service.clone());
 
         // Test item not found
         let response = app
@@ -435,7 +354,7 @@ mod tests {
 
         assert_eq!(
             json["message"],
-            format!("item with id {} not found", item_id)
+            format!("Item with id {} not found", item_id)
         );
         assert_eq!(json["error"], "");
         assert_eq!(json["data"], serde_json::Value::Null);
@@ -445,14 +364,15 @@ mod tests {
     async fn test_update_item() {
         let item_id = "1";
 
-        let app_state = Arc::new(AppState {
-            config: Config::default(),
+        let config = Arc::new(Config::default());
+        let repo = Arc::new(InMemoryItemRepository {
             items: Mutex::new(vec![Item {
                 id: item_id.into(),
                 name: "old item".into(),
             }]),
         });
-        let app = setup_app(app_state.clone());
+        let service = Arc::new(ItemService::new(config, repo.clone()));
+        let app = setup_app(service.clone());
 
         let updated_item = UpdateItem {
             name: "updated item".into(),
@@ -486,25 +406,23 @@ mod tests {
         assert_eq!(json["error"], "");
         assert_eq!(json["data"]["id"], item_id);
         assert_eq!(json["data"]["name"], updated_item.name);
-        assert_eq!((&app_state).items.lock().unwrap().len(), 1);
-        assert_eq!(
-            (&app_state).items.lock().unwrap()[0].name,
-            updated_item.name
-        );
+        assert_eq!((&repo).items.lock().unwrap().len(), 1);
+        assert_eq!((&repo).items.lock().unwrap()[0].name, updated_item.name);
     }
 
     #[tokio::test]
     async fn test_delete() {
         let item_id = "1";
 
-        let app_state = Arc::new(AppState {
-            config: Config::default(),
+        let config = Arc::new(Config::default());
+        let repo = Arc::new(InMemoryItemRepository {
             items: Mutex::new(vec![Item {
                 id: item_id.into(),
                 name: "test item".into(),
             }]),
         });
-        let app = setup_app(app_state.clone());
+        let service = Arc::new(ItemService::new(config, repo.clone()));
+        let app = setup_app(service.clone());
 
         let response = app
             .oneshot(
@@ -527,6 +445,6 @@ mod tests {
         assert_eq!(json["message"], format!("Deleted item with id {}", item_id));
         assert_eq!(json["error"], "");
         assert_eq!(json["data"], serde_json::Value::Null);
-        assert_eq!((&app_state).items.lock().unwrap().len(), 0);
+        assert_eq!((&repo).items.lock().unwrap().len(), 0);
     }
 }
