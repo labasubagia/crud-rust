@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use axum::{Extension, Json, extract::State, http::StatusCode, routing::get};
 use serde_json::{self, json};
@@ -10,16 +10,12 @@ use crud_rust::{
     config::Config,
     middleware::{CorrelationId, request_middleware},
     model::http::Response,
-    state::AppState,
+    repository::item::{InMemoryItemRepository, ItemRepository},
+    service::item::ItemService,
 };
 
 #[tokio::main]
 async fn main() {
-    let app_state: Arc<AppState> = Arc::new(AppState {
-        config: Config::new(),
-        items: Mutex::new(Vec::new()),
-    });
-
     let subscriber = FmtSubscriber::builder()
         .with_max_level(Level::TRACE)
         .finish();
@@ -27,9 +23,13 @@ async fn main() {
         tracing::error!("Failed to set global tracing subscriber: {}", e);
         return;
     }
-    let app = setup_app(app_state.clone());
 
-    let addr = app_state.config.get_addr();
+    let config = Arc::new(Config::new());
+    let repo = Arc::new(InMemoryItemRepository::new());
+    let service = Arc::new(ItemService::new(config.clone(), repo.clone()));
+    let app = setup_app(service.clone());
+
+    let addr = service.config.get_addr();
     let listener = match TcpListener::bind(addr).await {
         Ok(listener) => listener,
         Err(e) => {
@@ -39,7 +39,7 @@ async fn main() {
     };
 
     info!(
-        app_name = %app_state.config.app_name,
+        app_name = %service.config.app_name,
         addr = %addr.to_string(),
         "Starting server..."
     );
@@ -50,33 +50,31 @@ async fn main() {
     }
 }
 
-fn setup_app(app_state: Arc<AppState>) -> axum::Router {
+fn setup_app<R>(service: Arc<ItemService<R>>) -> axum::Router
+where
+    R: ItemRepository + 'static,
+{
     use crud_rust::handler::item::router_setup_items;
-
     axum::Router::new()
         .route("/", get(handler_index))
         .route("/api/healthcheck", get(handler_healthcheck))
         .nest("/api/items", router_setup_items())
         .layer(axum::middleware::from_fn(request_middleware))
-        .with_state(app_state)
+        .with_state(service)
 }
 
-async fn handler_index(
-    State(app_state): State<Arc<AppState>>,
+async fn handler_index<R>(
+    State(service): State<Arc<ItemService<R>>>,
     Extension(correlation_id): Extension<CorrelationId>,
-) -> (StatusCode, Json<serde_json::Value>) {
-    let status_code = StatusCode::OK;
-    info!(
-        app_name = %app_state.config.app_name,
-        status_code = status_code.as_u16(),
-        correlation_id = %correlation_id,
-        "Request handled"
-    );
+) -> (StatusCode, Json<serde_json::Value>)
+where
+    R: ItemRepository,
+{
     (
-        status_code,
+        StatusCode::OK,
         Json(json!(Response::<serde_json::Value> {
             correlation_id,
-            message: format!("Welcome to {}!", app_state.config.app_name),
+            message: format!("Welcome to {}!", service.config.app_name),
             error: "".into(),
             data: None,
         })),
@@ -84,18 +82,10 @@ async fn handler_index(
 }
 
 async fn handler_healthcheck(
-    State(app_state): State<Arc<AppState>>,
     Extension(correlation_id): Extension<CorrelationId>,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    let status_code = StatusCode::OK;
-    info!(
-        app_name = %app_state.config.app_name,
-        status_code = status_code.as_u16(),
-        correlation_id = %correlation_id,
-        "Request handled"
-    );
     (
-        status_code,
+        StatusCode::OK,
         Json(json!(Response::<serde_json::Value> {
             correlation_id,
             message: "ok".into(),
@@ -113,8 +103,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_index_handler() {
-        let app_state = Arc::new(AppState::default());
-        let app = setup_app(app_state.clone());
+        let service = Arc::new(ItemService::new(
+            Arc::new(Config::new()),
+            Arc::new(InMemoryItemRepository::new()),
+        ));
+        let app = setup_app(service.clone());
 
         let response = app
             .oneshot(
@@ -140,8 +133,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_healthcheck_handler() {
-        let app_state = Arc::new(AppState::default());
-        let app = setup_app(app_state.clone());
+        let service = Arc::new(ItemService::new(
+            Arc::new(Config::new()),
+            Arc::new(InMemoryItemRepository::new()),
+        ));
+        let app = setup_app(service.clone());
 
         let response = app
             .oneshot(
