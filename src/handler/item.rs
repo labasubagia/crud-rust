@@ -4,13 +4,9 @@ use serde_json::json;
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::{AppState, Response, middleware::CorrelationId};
-
-#[derive(Serialize, Clone)]
-pub struct Item {
-    pub id: String,
-    pub name: String,
-}
+use crate::middleware::CorrelationId;
+use crate::model::{http::Response, item::Item};
+use crate::state::AppState;
 
 #[derive(Serialize, Deserialize)]
 struct CreateItem {
@@ -22,7 +18,7 @@ struct UpdateItem {
     pub name: String,
 }
 
-pub fn router_setup() -> axum::Router<Arc<AppState>> {
+pub fn router_setup_items() -> axum::Router<Arc<AppState>> {
     axum::Router::new()
         .route("/", axum::routing::get(list_items).post(create_item))
         .route(
@@ -276,14 +272,15 @@ async fn delete_item(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Config, middleware};
+    use crate::config::Config;
+    use crate::middleware;
     use axum::http::Request;
     use std::sync::Mutex;
     use tower::ServiceExt;
 
     fn setup_app(app_state: Arc<AppState>) -> axum::Router {
         axum::Router::new()
-            .nest("/api/items", router_setup())
+            .nest("/api/items", router_setup_items())
             .layer(axum::middleware::from_fn(middleware::request_middleware))
             .with_state(app_state)
     }

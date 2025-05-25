@@ -1,81 +1,21 @@
-use std::{
-    env,
-    net::{IpAddr, Ipv4Addr, SocketAddr},
-    sync::{Arc, Mutex},
-};
+use std::sync::{Arc, Mutex};
 
 use axum::{Extension, Json, extract::State, http::StatusCode, routing::get};
-use serde::{Deserialize, Serialize};
 use serde_json::{self, json};
 use tokio::net::TcpListener;
 use tracing::{Level, info};
 use tracing_subscriber::FmtSubscriber;
 
-mod middleware;
-use middleware::{CorrelationId, request_middleware};
-
-mod items;
-use items::Item;
-
-pub struct Config {
-    pub app_name: String,
-    pub host: IpAddr,
-    pub port: u16,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Config {
-            app_name: "my_app".into(),
-            host: Ipv4Addr::new(0, 0, 0, 0).into(),
-            port: 3000,
-        }
-    }
-}
-
-impl Config {
-    fn new() -> Self {
-        let default = Self::default();
-
-        let app_name = env::var("APP_NAME").unwrap_or(default.app_name);
-        let host = env::var("HOST")
-            .unwrap_or(default.host.to_string())
-            .parse::<IpAddr>()
-            .unwrap_or(default.host);
-        let port = env::var("PORT")
-            .unwrap_or(default.port.to_string())
-            .parse::<u16>()
-            .unwrap_or(default.port);
-
-        Self {
-            host,
-            port,
-            app_name,
-        }
-    }
-
-    fn get_addr(&self) -> SocketAddr {
-        SocketAddr::from((self.host, self.port))
-    }
-}
-
-pub struct AppState {
-    pub config: Config,
-    pub items: Mutex<Vec<Item>>,
-}
-
-impl Default for AppState {
-    fn default() -> Self {
-        AppState {
-            config: Config::default(),
-            items: Mutex::new(Vec::new()),
-        }
-    }
-}
+use crud_rust::{
+    config::Config,
+    middleware::{CorrelationId, request_middleware},
+    model::http::Response,
+    state::AppState,
+};
 
 #[tokio::main]
 async fn main() {
-    let app_state = Arc::new(AppState {
+    let app_state: Arc<AppState> = Arc::new(AppState {
         config: Config::new(),
         items: Mutex::new(Vec::new()),
     });
@@ -83,8 +23,10 @@ async fn main() {
     let subscriber = FmtSubscriber::builder()
         .with_max_level(Level::TRACE)
         .finish();
-    tracing::subscriber::set_global_default(subscriber)
-        .expect("Failed to set global default subscriber");
+    if let Err(e) = tracing::subscriber::set_global_default(subscriber) {
+        tracing::error!("Failed to set global tracing subscriber: {}", e);
+        return;
+    }
     let app = setup_app(app_state.clone());
 
     let addr = app_state.config.get_addr();
@@ -109,22 +51,14 @@ async fn main() {
 }
 
 fn setup_app(app_state: Arc<AppState>) -> axum::Router {
-    use items::router_setup as items_router_setup;
+    use crud_rust::handler::item::router_setup_items;
 
     axum::Router::new()
         .route("/", get(handler_index))
         .route("/api/healthcheck", get(handler_healthcheck))
-        .nest("/api/items", items_router_setup())
+        .nest("/api/items", router_setup_items())
         .layer(axum::middleware::from_fn(request_middleware))
         .with_state(app_state)
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct Response<T> {
-    pub correlation_id: String,
-    pub message: String,
-    pub error: String,
-    pub data: Option<T>,
 }
 
 async fn handler_index(
@@ -176,32 +110,6 @@ mod tests {
     use super::*;
     use axum::http::Request;
     use tower::ServiceExt;
-
-    #[test]
-    fn test_config_default() {
-        let config = Config::default();
-        assert_eq!(config.app_name, "my_app");
-        assert_eq!(config.port, 3000);
-        assert_eq!(config.host, IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)));
-    }
-
-    #[test]
-    fn test_config_with_env() {
-        unsafe { env::set_var("APP_NAME", "test_app") };
-        unsafe { env::set_var("HOST", "127.0.0.1") };
-
-        let config = Config::new();
-        assert_eq!(config.app_name, "test_app");
-        assert_eq!(config.host, IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)));
-    }
-
-    #[test]
-    fn test_config_get_addr() {
-        let config = Config::default();
-        let addr = config.get_addr();
-        assert_eq!(addr.port(), 3000);
-        assert_eq!(addr.ip(), IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)));
-    }
 
     #[tokio::test]
     async fn test_index_handler() {
