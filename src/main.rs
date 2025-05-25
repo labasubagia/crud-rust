@@ -5,12 +5,11 @@ use std::{
 };
 
 use axum::{
-    Json,
+    Extension, Json,
     extract::State,
     http::StatusCode,
     routing::{get, post, put},
 };
-use hyper::HeaderMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{self, json};
 use tokio::net::TcpListener;
@@ -18,7 +17,8 @@ use tracing::{Level, info};
 use tracing_subscriber::FmtSubscriber;
 use uuid::Uuid;
 
-const HEADER_CORRELATION_ID: &str = "X-Correlation-ID";
+mod middleware;
+use middleware::{CorrelationId, request_middleware};
 
 struct Config {
     app_name: String,
@@ -97,21 +97,7 @@ async fn main() {
         .finish();
     tracing::subscriber::set_global_default(subscriber)
         .expect("Failed to set global default subscriber");
-
-    let app = axum::Router::new()
-        .route("/", get(handler_index))
-        .route("/api/healthcheck", get(handler_healthcheck))
-        .route(
-            "/api/items",
-            post(handler_create_item).get(handler_list_items),
-        )
-        .route(
-            "/api/items/{id}",
-            put(handler_update_item)
-                .get(handler_get_item)
-                .delete(handler_delete_item),
-        )
-        .with_state(app_state.clone());
+    let app = setup_app(app_state.clone());
 
     let addr = app_state.config.get_addr();
     let listener = match TcpListener::bind(addr).await {
@@ -134,6 +120,24 @@ async fn main() {
     }
 }
 
+fn setup_app(app_state: Arc<AppState>) -> axum::Router {
+    axum::Router::new()
+        .route("/", get(handler_index))
+        .route("/api/healthcheck", get(handler_healthcheck))
+        .route(
+            "/api/items",
+            post(handler_create_item).get(handler_list_items),
+        )
+        .route(
+            "/api/items/{id}",
+            put(handler_update_item)
+                .get(handler_get_item)
+                .delete(handler_delete_item),
+        )
+        .layer(axum::middleware::from_fn(request_middleware))
+        .with_state(app_state)
+}
+
 #[derive(Serialize, Deserialize)]
 struct Response<T> {
     correlation_id: String,
@@ -144,13 +148,8 @@ struct Response<T> {
 
 async fn handler_index(
     State(app_state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    Extension(correlation_id): Extension<CorrelationId>,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    let default_correlation_id = Uuid::new_v4().to_string();
-    let correlation_id = headers
-        .get(HEADER_CORRELATION_ID)
-        .map(|v| v.to_str().unwrap_or(&default_correlation_id))
-        .unwrap_or(&default_correlation_id);
     let status_code = StatusCode::OK;
     info!(
         app_name = %app_state.config.app_name,
@@ -161,7 +160,7 @@ async fn handler_index(
     (
         status_code,
         Json(json!(Response::<serde_json::Value> {
-            correlation_id: correlation_id.into(),
+            correlation_id,
             message: format!("Welcome to {}!", app_state.config.app_name),
             error: "".into(),
             data: None,
@@ -171,13 +170,8 @@ async fn handler_index(
 
 async fn handler_healthcheck(
     State(app_state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    Extension(correlation_id): Extension<CorrelationId>,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    let default_correlation_id = Uuid::new_v4().to_string();
-    let correlation_id = headers
-        .get(HEADER_CORRELATION_ID)
-        .map(|v| v.to_str().unwrap_or(&default_correlation_id))
-        .unwrap_or(&default_correlation_id);
     let status_code = StatusCode::OK;
     info!(
         app_name = %app_state.config.app_name,
@@ -188,7 +182,7 @@ async fn handler_healthcheck(
     (
         status_code,
         Json(json!(Response::<serde_json::Value> {
-            correlation_id: correlation_id.into(),
+            correlation_id,
             message: "ok".into(),
             error: "".into(),
             data: None,
@@ -203,21 +197,15 @@ struct CreateItem {
 
 async fn handler_list_items(
     State(app_state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    Extension(correlation_id): Extension<CorrelationId>,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    let default_correlation_id = Uuid::new_v4().to_string();
-    let correlation_id = headers
-        .get(HEADER_CORRELATION_ID)
-        .map(|v| v.to_str().unwrap_or(&default_correlation_id))
-        .unwrap_or(&default_correlation_id);
-
     let items = match app_state.items.lock() {
         Ok(items) => items.to_vec(),
         Err(e) => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!(Response::<serde_json::Value> {
-                    correlation_id: correlation_id.into(),
+                    correlation_id,
                     message: "failed to aqcuire lock".into(),
                     error: format!("cannot aqcuire lock: {}", e),
                     data: None,
@@ -239,21 +227,15 @@ async fn handler_list_items(
 
 async fn handler_create_item(
     State(app_state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    Extension(correlation_id): Extension<CorrelationId>,
     Json(payload): Json<CreateItem>,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    let default_correlation_id = Uuid::new_v4().to_string();
-    let correlation_id = headers
-        .get(HEADER_CORRELATION_ID)
-        .map(|v| v.to_str().unwrap_or(&default_correlation_id))
-        .unwrap_or(&default_correlation_id);
-
     let name = payload.name.trim().to_lowercase();
     if name.is_empty() {
         return (
             StatusCode::BAD_REQUEST,
             Json(json!(Response::<serde_json::Value> {
-                correlation_id: correlation_id.into(),
+                correlation_id,
                 message: "Item name cannot be empty".into(),
                 error: "Invalid input".into(),
                 data: None,
@@ -268,7 +250,7 @@ async fn handler_create_item(
                 Some(item) => (
                     StatusCode::OK,
                     Json(json!(Response::<Item> {
-                        correlation_id: correlation_id.into(),
+                        correlation_id,
                         message: format!("Item '{}' already exists", payload.name),
                         error: "".into(),
                         data: Some(item.clone()),
@@ -283,7 +265,7 @@ async fn handler_create_item(
                     (
                         StatusCode::CREATED,
                         Json(json!(Response::<Item> {
-                            correlation_id: correlation_id.into(),
+                            correlation_id,
                             message: format!("Created item '{}'", payload.name),
                             error: "".into(),
                             data: Some(new_item),
@@ -295,7 +277,7 @@ async fn handler_create_item(
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!(Response::<serde_json::Value> {
-                correlation_id: correlation_id.into(),
+                correlation_id,
                 message: "Failed to process request".into(),
                 error: format!("cannot aqcuire lock: {}", e),
                 data: None,
@@ -306,15 +288,9 @@ async fn handler_create_item(
 
 async fn handler_get_item(
     State(app_state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    Extension(correlation_id): Extension<CorrelationId>,
     axum::extract::Path(id): axum::extract::Path<String>,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    let default_correlation_id = Uuid::new_v4().to_string();
-    let correlation_id = headers
-        .get(HEADER_CORRELATION_ID)
-        .map(|v| v.to_str().unwrap_or(&default_correlation_id))
-        .unwrap_or(&default_correlation_id);
-
     match app_state.items.lock() {
         Ok(items) => {
             let item = items.iter().find(|item| item.id == id).cloned();
@@ -322,7 +298,7 @@ async fn handler_get_item(
                 Some(item) => (
                     StatusCode::OK,
                     Json(json!(Response::<Item> {
-                        correlation_id: correlation_id.into(),
+                        correlation_id,
                         message: "ok".into(),
                         error: "".into(),
                         data: Some(item),
@@ -331,7 +307,7 @@ async fn handler_get_item(
                 None => (
                     StatusCode::NOT_FOUND,
                     Json(json!(Response::<Item> {
-                        correlation_id: correlation_id.into(),
+                        correlation_id,
                         message: format!("item with id {} not found", id),
                         error: "".into(),
                         data: None,
@@ -342,7 +318,7 @@ async fn handler_get_item(
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!(Response::<serde_json::Value> {
-                correlation_id: correlation_id.into(),
+                correlation_id,
                 message: "something went wrong".into(),
                 error: format!("cannot aqcuire lock: {}", e),
                 data: None,
@@ -358,22 +334,16 @@ struct UpdateItem {
 
 async fn handler_update_item(
     State(app_state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    Extension(correlation_id): Extension<CorrelationId>,
     axum::extract::Path(id): axum::extract::Path<String>,
     Json(payload): Json<UpdateItem>,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    let default_correlation_id = Uuid::new_v4().to_string();
-    let correlation_id = headers
-        .get(HEADER_CORRELATION_ID)
-        .map(|v| v.to_str().unwrap_or(&default_correlation_id))
-        .unwrap_or(&default_correlation_id);
-
     let name = payload.name.trim().to_lowercase();
     if name.is_empty() {
         return (
             StatusCode::BAD_REQUEST,
             Json(json!(Response::<serde_json::Value> {
-                correlation_id: correlation_id.into(),
+                correlation_id,
                 message: "Item name cannot be empty".into(),
                 error: "Invalid input".into(),
                 data: None,
@@ -389,7 +359,7 @@ async fn handler_update_item(
                     return (
                         StatusCode::NOT_FOUND,
                         Json(json!(Response::<serde_json::Value> {
-                            correlation_id: correlation_id.into(),
+                            correlation_id,
                             message: format!("item with id {} not found", id),
                             error: "".into(),
                             data: None,
@@ -403,7 +373,7 @@ async fn handler_update_item(
                     return (
                         StatusCode::NOT_FOUND,
                         Json(json!(Response::<serde_json::Value> {
-                            correlation_id: correlation_id.into(),
+                            correlation_id,
                             message: format!("item with id {} not found", id),
                             error: "".into(),
                             data: None,
@@ -417,7 +387,7 @@ async fn handler_update_item(
             (
                 StatusCode::OK,
                 Json(json!(Response::<Item> {
-                    correlation_id: correlation_id.into(),
+                    correlation_id,
                     message: format!("Updated item '{}' with id {}", payload.name, id),
                     error: "".into(),
                     data: Some(updated_item),
@@ -427,7 +397,7 @@ async fn handler_update_item(
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!(Response::<serde_json::Value> {
-                correlation_id: correlation_id.into(),
+                correlation_id,
                 message: "something went wrong".into(),
                 error: format!("cannot aqcuire lock: {}", e),
                 data: None,
@@ -438,15 +408,9 @@ async fn handler_update_item(
 
 async fn handler_delete_item(
     State(app_state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    Extension(correlation_id): Extension<CorrelationId>,
     axum::extract::Path(id): axum::extract::Path<String>,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    let default_correlation_id = Uuid::new_v4().to_string();
-    let correlation_id = headers
-        .get(HEADER_CORRELATION_ID)
-        .map(|v| v.to_str().unwrap_or(&default_correlation_id))
-        .unwrap_or(&default_correlation_id);
-
     match app_state.items.lock() {
         Ok(mut items) => {
             *items = items
@@ -457,7 +421,7 @@ async fn handler_delete_item(
             (
                 StatusCode::OK,
                 Json(json!(Response::<serde_json::Value> {
-                    correlation_id: correlation_id.into(),
+                    correlation_id,
                     message: format!("Deleted item with id {}", id),
                     error: "".into(),
                     data: None,
@@ -467,7 +431,7 @@ async fn handler_delete_item(
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!(Response::<serde_json::Value> {
-                correlation_id: correlation_id.into(),
+                correlation_id,
                 message: "something went wrong".into(),
                 error: format!("cannot aqcuire lock: {}", e),
                 data: None,
@@ -479,9 +443,8 @@ async fn handler_delete_item(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::{http::Request, routing::delete};
+    use axum::http::Request;
     use tower::ServiceExt;
-    use uuid::Uuid;
 
     #[test]
     fn test_config_default() {
@@ -512,10 +475,7 @@ mod tests {
     #[tokio::test]
     async fn test_index_handler() {
         let app_state = Arc::new(AppState::default());
-
-        let app = axum::Router::new()
-            .route("/", get(handler_index))
-            .with_state(app_state);
+        let app = setup_app(app_state.clone());
 
         let response = app
             .oneshot(
@@ -542,10 +502,7 @@ mod tests {
     #[tokio::test]
     async fn test_healthcheck_handler() {
         let app_state = Arc::new(AppState::default());
-
-        let app = axum::Router::new()
-            .route("/api/healthcheck", get(handler_healthcheck))
-            .with_state(app_state);
+        let app = setup_app(app_state.clone());
 
         let response = app
             .oneshot(
@@ -572,10 +529,7 @@ mod tests {
     #[tokio::test]
     async fn test_create_item_handler() {
         let app_state = Arc::new(AppState::default());
-
-        let app = axum::Router::new()
-            .route("/api/items", post(handler_create_item))
-            .with_state(app_state.clone());
+        let app = setup_app(app_state.clone());
 
         let new_item = CreateItem {
             name: "test item".into(),
@@ -587,7 +541,6 @@ mod tests {
                     .method("POST")
                     .uri("/api/items")
                     .header("Content-Type", "application/json")
-                    .header(HEADER_CORRELATION_ID, Uuid::new_v4().to_string())
                     .body(axum::body::Body::from(
                         serde_json::to_string(&new_item).unwrap(),
                     ))
@@ -625,16 +578,12 @@ mod tests {
                 },
             ]),
         });
-
-        let app = axum::Router::new()
-            .route("/api/items", get(handler_list_items))
-            .with_state(app_state.clone());
+        let app = setup_app(app_state.clone());
 
         let response = app
             .oneshot(
                 Request::builder()
                     .uri("/api/items")
-                    .header(HEADER_CORRELATION_ID, Uuid::new_v4().to_string())
                     .body(axum::body::Body::empty())
                     .unwrap(),
             )
@@ -667,10 +616,7 @@ mod tests {
                 name: "test item".into(),
             }]),
         });
-
-        let app = axum::Router::new()
-            .route("/api/items/{id}", get(handler_get_item))
-            .with_state(app_state.clone());
+        let app = setup_app(app_state.clone());
 
         // Test successful get
         let response = app
@@ -678,7 +624,6 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .uri(format!("/api/items/{}", item_id))
-                    .header(HEADER_CORRELATION_ID, Uuid::new_v4().to_string())
                     .body(axum::body::Body::empty())
                     .unwrap(),
             )
@@ -709,17 +654,13 @@ mod tests {
                 name: "test item".into(),
             }]),
         });
-
-        let app = axum::Router::new()
-            .route("/api/items/{id}", get(handler_get_item))
-            .with_state(app_state.clone());
+        let app = setup_app(app_state.clone());
 
         // Test item not found
         let response = app
             .oneshot(
                 Request::builder()
                     .uri(format!("/api/items/{}", item_id))
-                    .header(HEADER_CORRELATION_ID, Uuid::new_v4().to_string())
                     .body(axum::body::Body::empty())
                     .unwrap(),
             )
@@ -752,10 +693,7 @@ mod tests {
                 name: "old item".into(),
             }]),
         });
-
-        let app = axum::Router::new()
-            .route("/api/items/{id}", axum::routing::put(handler_update_item))
-            .with_state(app_state.clone());
+        let app = setup_app(app_state.clone());
 
         let updated_item = UpdateItem {
             name: "updated item".into(),
@@ -767,7 +705,6 @@ mod tests {
                     .method("PUT")
                     .uri(format!("/api/items/{}", item_id))
                     .header("Content-Type", "application/json")
-                    .header(HEADER_CORRELATION_ID, Uuid::new_v4().to_string())
                     .body(axum::body::Body::from(
                         serde_json::to_string(&updated_item).unwrap(),
                     ))
@@ -808,17 +745,13 @@ mod tests {
                 name: "test item".into(),
             }]),
         });
-
-        let app = axum::Router::new()
-            .route("/api/items/{id}", delete(handler_delete_item))
-            .with_state(app_state.clone());
+        let app = setup_app(app_state.clone());
 
         let response = app
             .oneshot(
                 Request::builder()
                     .method("DELETE")
                     .uri(format!("/api/items/{}", item_id))
-                    .header(HEADER_CORRELATION_ID, Uuid::new_v4().to_string())
                     .body(axum::body::Body::empty())
                     .unwrap(),
             )
