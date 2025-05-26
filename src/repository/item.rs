@@ -7,6 +7,7 @@ use crate::model::{
 };
 
 #[async_trait]
+#[cfg_attr(test, mockall::automock)]
 pub trait ItemRepository: Send + Sync {
     async fn add(&self, item: Item) -> Result<Item, AppError>;
     async fn list(&self) -> Result<Vec<Item>, AppError>;

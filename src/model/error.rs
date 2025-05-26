@@ -1,11 +1,13 @@
 use axum::http::StatusCode;
 
+#[derive(Debug, Clone)]
 pub enum AppErrorCode {
     NotFound,
     InvalidInput,
     InternalError(String),
 }
 
+#[derive(Debug, Clone)]
 pub struct AppError {
     pub code: AppErrorCode,
     pub message: String,

@@ -1,6 +1,6 @@
 use serde::Serialize;
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Clone, Debug)]
 pub struct Item {
     pub id: String,
     pub name: String,
