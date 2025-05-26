@@ -5,8 +5,7 @@ use std::sync::Arc;
 
 use crate::middleware::CorrelationId;
 use crate::model::{http::Response, item::Item};
-use crate::repository::item::ItemRepository;
-use crate::service::item::ItemService;
+use crate::state::AppState;
 
 #[derive(Serialize, Deserialize)]
 struct CreateItem {
@@ -18,10 +17,7 @@ struct UpdateItem {
     pub name: String,
 }
 
-pub fn router_setup_items<R>() -> axum::Router<Arc<ItemService<R>>>
-where
-    R: ItemRepository + 'static,
-{
+pub fn router_setup_items() -> axum::Router<Arc<AppState>> {
     axum::Router::new()
         .route("/", axum::routing::get(list_items).post(create_item))
         .route(
@@ -32,14 +28,11 @@ where
         )
 }
 
-async fn list_items<R>(
-    State(service): State<Arc<ItemService<R>>>,
+async fn list_items(
+    State(state): State<Arc<AppState>>,
     Extension(correlation_id): Extension<CorrelationId>,
-) -> (StatusCode, Json<serde_json::Value>)
-where
-    R: ItemRepository,
-{
-    match service.list().await {
+) -> (StatusCode, Json<serde_json::Value>) {
+    match state.service.item.list().await {
         Ok(items) => (
             StatusCode::OK,
             Json(json!(Response::<Vec<Item>> {
@@ -61,15 +54,12 @@ where
     }
 }
 
-async fn create_item<R>(
-    State(service): State<Arc<ItemService<R>>>,
+async fn create_item(
+    State(state): State<Arc<AppState>>,
     Extension(correlation_id): Extension<CorrelationId>,
     Json(payload): Json<CreateItem>,
-) -> (StatusCode, Json<serde_json::Value>)
-where
-    R: ItemRepository,
-{
-    match service.create(payload.name).await {
+) -> (StatusCode, Json<serde_json::Value>) {
+    match state.service.item.create(payload.name).await {
         Ok(item) => (
             StatusCode::CREATED,
             Json(json!(Response::<Item> {
@@ -91,15 +81,12 @@ where
     }
 }
 
-async fn get_item<R>(
-    State(service): State<Arc<ItemService<R>>>,
+async fn get_item(
+    State(state): State<Arc<AppState>>,
     Extension(correlation_id): Extension<CorrelationId>,
     axum::extract::Path(id): axum::extract::Path<String>,
-) -> (StatusCode, Json<serde_json::Value>)
-where
-    R: ItemRepository,
-{
-    match service.get(id).await {
+) -> (StatusCode, Json<serde_json::Value>) {
+    match state.service.item.get(id).await {
         Ok(item) => (
             StatusCode::OK,
             Json(json!(Response::<Item> {
@@ -121,16 +108,13 @@ where
     }
 }
 
-async fn update_item<R>(
-    State(service): State<Arc<ItemService<R>>>,
+async fn update_item(
+    State(state): State<Arc<AppState>>,
     Extension(correlation_id): Extension<CorrelationId>,
     axum::extract::Path(id): axum::extract::Path<String>,
     Json(payload): Json<UpdateItem>,
-) -> (StatusCode, Json<serde_json::Value>)
-where
-    R: ItemRepository,
-{
-    match service.update(id, payload.name.clone()).await {
+) -> (StatusCode, Json<serde_json::Value>) {
+    match state.service.item.update(id, payload.name.clone()).await {
         Ok(item) => (
             StatusCode::OK,
             Json(json!(Response::<Item> {
@@ -152,15 +136,12 @@ where
     }
 }
 
-async fn delete_item<R>(
-    State(service): State<Arc<ItemService<R>>>,
+async fn delete_item(
+    State(state): State<Arc<AppState>>,
     Extension(correlation_id): Extension<CorrelationId>,
     axum::extract::Path(id): axum::extract::Path<String>,
-) -> (StatusCode, Json<serde_json::Value>)
-where
-    R: ItemRepository,
-{
-    match service.delete(id.clone()).await {
+) -> (StatusCode, Json<serde_json::Value>) {
+    match state.service.item.delete(id.clone()).await {
         Ok(_) => (
             StatusCode::OK,
             Json(json!(Response::<serde_json::Value> {
@@ -187,24 +168,34 @@ mod tests {
     use super::*;
     use crate::config::Config;
     use crate::middleware;
+    use crate::repository::Repository;
     use crate::repository::item::InMemoryItemRepository;
+    use crate::service::Service;
     use axum::http::Request;
     use std::sync::Mutex;
     use tower::ServiceExt;
 
-    fn setup_app(service: Arc<ItemService<InMemoryItemRepository>>) -> axum::Router {
+    fn setup_app(state: Arc<AppState>) -> axum::Router {
         axum::Router::new()
             .nest("/api/items", router_setup_items())
             .layer(axum::middleware::from_fn(middleware::request_middleware))
-            .with_state(service)
+            .with_state(state)
     }
 
     #[tokio::test]
     async fn test_create_item() {
         let config = Arc::new(Config::default());
-        let repo = Arc::new(InMemoryItemRepository::new());
-        let service = Arc::new(ItemService::new(config, repo.clone()));
-        let app = setup_app(service.clone());
+
+        let item_repo = Arc::new(InMemoryItemRepository::new());
+        let repo = Arc::new(Repository {
+            item: item_repo.clone(),
+        });
+        let service = Arc::new(Service::new(config.clone(), repo.clone()));
+        let app_state = Arc::new(AppState {
+            config: config.clone(),
+            service: service,
+        });
+        let app = setup_app(app_state);
 
         let new_item = CreateItem {
             name: "test item".into(),
@@ -234,14 +225,14 @@ mod tests {
         assert_eq!(json["message"], format!("Created item '{}'", new_item.name));
         assert_eq!(json["error"], "");
         assert_eq!(json["data"]["name"], new_item.name);
-        assert_eq!((&repo).items.lock().unwrap().len(), 1);
-        assert_eq!((&repo).items.lock().unwrap()[0].name, new_item.name);
+        assert_eq!((&item_repo).items.lock().unwrap().len(), 1);
+        assert_eq!((&item_repo).items.lock().unwrap()[0].name, new_item.name);
     }
 
     #[tokio::test]
     async fn test_list_items() {
         let config = Arc::new(Config::default());
-        let repo = Arc::new(InMemoryItemRepository {
+        let item_repo = Arc::new(InMemoryItemRepository {
             items: Mutex::new(vec![
                 Item {
                     id: "1".into(),
@@ -253,8 +244,15 @@ mod tests {
                 },
             ]),
         });
-        let service = Arc::new(ItemService::new(config, repo.clone()));
-        let app = setup_app(service.clone());
+        let repo = Arc::new(Repository {
+            item: item_repo.clone(),
+        });
+        let service = Arc::new(Service::new(config.clone(), repo.clone()));
+        let app_state = Arc::new(AppState {
+            config: config.clone(),
+            service: service,
+        });
+        let app = setup_app(app_state);
 
         let response = app
             .oneshot(
@@ -277,7 +275,7 @@ mod tests {
         assert_eq!(json["error"], "");
         assert_eq!(
             json["data"].as_array().unwrap().len(),
-            repo.items.lock().unwrap().len()
+            item_repo.items.lock().unwrap().len()
         );
     }
 
@@ -286,14 +284,21 @@ mod tests {
         let item_id = "1";
 
         let config = Arc::new(Config::default());
-        let repo = Arc::new(InMemoryItemRepository {
+        let item_repo = Arc::new(InMemoryItemRepository {
             items: Mutex::new(vec![Item {
                 id: item_id.into(),
                 name: "test item".into(),
             }]),
         });
-        let service = Arc::new(ItemService::new(config, repo.clone()));
-        let app = setup_app(service.clone());
+        let repo = Arc::new(Repository {
+            item: item_repo.clone(),
+        });
+        let service = Arc::new(Service::new(config.clone(), repo.clone()));
+        let app_state = Arc::new(AppState {
+            config: config.clone(),
+            service: service,
+        });
+        let app = setup_app(app_state);
 
         // Test successful get
         let response = app
@@ -325,14 +330,21 @@ mod tests {
         let item_id = "nonexistent_id";
 
         let config = Arc::new(Config::default());
-        let repo = Arc::new(InMemoryItemRepository {
+        let item_repo = Arc::new(InMemoryItemRepository {
             items: Mutex::new(vec![Item {
                 id: "1".into(),
                 name: "test item".into(),
             }]),
         });
-        let service = Arc::new(ItemService::new(config, repo.clone()));
-        let app = setup_app(service.clone());
+        let repo = Arc::new(Repository {
+            item: item_repo.clone(),
+        });
+        let service = Arc::new(Service::new(config.clone(), repo.clone()));
+        let app_state = Arc::new(AppState {
+            config: config.clone(),
+            service: service,
+        });
+        let app = setup_app(app_state);
 
         // Test item not found
         let response = app
@@ -365,14 +377,23 @@ mod tests {
         let item_id = "1";
 
         let config = Arc::new(Config::default());
-        let repo = Arc::new(InMemoryItemRepository {
+        let item_repo = Arc::new(InMemoryItemRepository {
             items: Mutex::new(vec![Item {
                 id: item_id.into(),
                 name: "old item".into(),
             }]),
         });
-        let service = Arc::new(ItemService::new(config, repo.clone()));
-        let app = setup_app(service.clone());
+
+        let repo = Arc::new(Repository {
+            item: item_repo.clone(),
+        });
+
+        let service = Arc::new(Service::new(config.clone(), repo.clone()));
+        let app_state = Arc::new(AppState {
+            config: config.clone(),
+            service: service,
+        });
+        let app = setup_app(app_state);
 
         let updated_item = UpdateItem {
             name: "updated item".into(),
@@ -406,8 +427,11 @@ mod tests {
         assert_eq!(json["error"], "");
         assert_eq!(json["data"]["id"], item_id);
         assert_eq!(json["data"]["name"], updated_item.name);
-        assert_eq!((&repo).items.lock().unwrap().len(), 1);
-        assert_eq!((&repo).items.lock().unwrap()[0].name, updated_item.name);
+        assert_eq!((&item_repo).items.lock().unwrap().len(), 1);
+        assert_eq!(
+            (&item_repo).items.lock().unwrap()[0].name,
+            updated_item.name
+        );
     }
 
     #[tokio::test]
@@ -415,14 +439,22 @@ mod tests {
         let item_id = "1";
 
         let config = Arc::new(Config::default());
-        let repo = Arc::new(InMemoryItemRepository {
+        let item_repo = Arc::new(InMemoryItemRepository {
             items: Mutex::new(vec![Item {
                 id: item_id.into(),
                 name: "test item".into(),
             }]),
         });
-        let service = Arc::new(ItemService::new(config, repo.clone()));
-        let app = setup_app(service.clone());
+        let repo = Arc::new(Repository {
+            item: item_repo.clone(),
+        });
+
+        let service = Arc::new(Service::new(config.clone(), repo.clone()));
+        let app_state = Arc::new(AppState {
+            config: config.clone(),
+            service: service,
+        });
+        let app = setup_app(app_state);
 
         let response = app
             .oneshot(
@@ -445,6 +477,6 @@ mod tests {
         assert_eq!(json["message"], format!("Deleted item with id {}", item_id));
         assert_eq!(json["error"], "");
         assert_eq!(json["data"], serde_json::Value::Null);
-        assert_eq!((&repo).items.lock().unwrap().len(), 0);
+        assert_eq!((&item_repo).items.lock().unwrap().len(), 0);
     }
 }

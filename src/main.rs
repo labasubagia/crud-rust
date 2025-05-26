@@ -10,8 +10,9 @@ use crud_rust::{
     config::Config,
     middleware::{CorrelationId, request_middleware},
     model::http::Response,
-    repository::item::{InMemoryItemRepository, ItemRepository},
-    service::item::ItemService,
+    repository::{Repository, item::InMemoryItemRepository},
+    service::Service,
+    state::AppState,
 };
 
 #[tokio::main]
@@ -25,11 +26,21 @@ async fn main() {
     }
 
     let config = Arc::new(Config::new());
-    let repo = Arc::new(InMemoryItemRepository::new());
-    let service = Arc::new(ItemService::new(config.clone(), repo.clone()));
-    let app = setup_app(service.clone());
 
-    let addr = service.config.get_addr();
+    let item_repo = Arc::new(InMemoryItemRepository::new());
+
+    let repo = Arc::new(Repository {
+        item: item_repo.clone(),
+    });
+    let service = Arc::new(Service::new(config.clone(), repo.clone()));
+
+    let app_state = Arc::new(AppState {
+        config: config.clone(),
+        service: service.clone(),
+    });
+    let app = setup_app(app_state.clone());
+
+    let addr = &app_state.config.get_addr();
     let listener = match TcpListener::bind(addr).await {
         Ok(listener) => listener,
         Err(e) => {
@@ -39,7 +50,7 @@ async fn main() {
     };
 
     info!(
-        app_name = %service.config.app_name,
+        app_name = %app_state.config.app_name,
         addr = %addr.to_string(),
         "Starting server..."
     );
@@ -50,31 +61,25 @@ async fn main() {
     }
 }
 
-fn setup_app<R>(service: Arc<ItemService<R>>) -> axum::Router
-where
-    R: ItemRepository + 'static,
-{
+fn setup_app(state: Arc<AppState>) -> axum::Router {
     use crud_rust::handler::item::router_setup_items;
     axum::Router::new()
         .route("/", get(handler_index))
         .route("/api/healthcheck", get(handler_healthcheck))
         .nest("/api/items", router_setup_items())
         .layer(axum::middleware::from_fn(request_middleware))
-        .with_state(service)
+        .with_state(state)
 }
 
-async fn handler_index<R>(
-    State(service): State<Arc<ItemService<R>>>,
+async fn handler_index(
+    State(state): State<Arc<AppState>>,
     Extension(correlation_id): Extension<CorrelationId>,
-) -> (StatusCode, Json<serde_json::Value>)
-where
-    R: ItemRepository,
-{
+) -> (StatusCode, Json<serde_json::Value>) {
     (
         StatusCode::OK,
         Json(json!(Response::<serde_json::Value> {
             correlation_id,
-            message: format!("Welcome to {}!", service.config.app_name),
+            message: format!("Welcome to {}!", &state.config.app_name),
             error: "".into(),
             data: None,
         })),
@@ -103,11 +108,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_index_handler() {
-        let service = Arc::new(ItemService::new(
-            Arc::new(Config::new()),
-            Arc::new(InMemoryItemRepository::new()),
-        ));
-        let app = setup_app(service.clone());
+        let config = Arc::new(Config::new());
+        let item_repo = Arc::new(InMemoryItemRepository::new());
+        let repo = Arc::new(Repository {
+            item: item_repo.clone(),
+        });
+        let service = Arc::new(Service::new(config.clone(), repo.clone()));
+        let app_state = Arc::new(AppState {
+            config: config.clone(),
+            service: service,
+        });
+        let app = setup_app(app_state);
 
         let response = app
             .oneshot(
@@ -133,11 +144,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_healthcheck_handler() {
-        let service = Arc::new(ItemService::new(
-            Arc::new(Config::new()),
-            Arc::new(InMemoryItemRepository::new()),
-        ));
-        let app = setup_app(service.clone());
+        let config = Arc::new(Config::new());
+        let item_repo = Arc::new(InMemoryItemRepository::new());
+        let repo = Arc::new(Repository {
+            item: item_repo.clone(),
+        });
+        let service = Arc::new(Service::new(config.clone(), repo.clone()));
+        let app_state = Arc::new(AppState {
+            config: config.clone(),
+            service: service,
+        });
+        let app = setup_app(app_state);
 
         let response = app
             .oneshot(

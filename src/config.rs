@@ -3,6 +3,7 @@ use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
 };
 
+#[derive(Debug, Clone)]
 pub struct Config {
     pub app_name: String,
     pub host: IpAddr,
@@ -11,7 +12,7 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        Config {
+        Self {
             app_name: "my_app".into(),
             host: Ipv4Addr::new(0, 0, 0, 0).into(),
             port: 3000,
