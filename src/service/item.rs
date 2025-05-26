@@ -86,13 +86,14 @@ impl ItemService {
 
 #[cfg(test)]
 mod tests {
-    use crate::repository::item::MockItemRepository;
+    use crate::repository::{item::MockItemRepository, user::MockUserRepository};
 
     use super::*;
 
     #[tokio::test]
     async fn test_create_item() {
         let mut mock_item_repo = MockItemRepository::new();
+        let mock_user_repo = MockUserRepository::new();
 
         mock_item_repo
             .expect_add()
@@ -103,6 +104,7 @@ mod tests {
             Arc::new(Config::default()),
             Arc::new(Repository {
                 item: Arc::new(mock_item_repo),
+                user: Arc::new(mock_user_repo),
             }),
         );
 
@@ -116,6 +118,8 @@ mod tests {
     #[tokio::test]
     async fn test_get_item() {
         let mut mock_item_repo = MockItemRepository::new();
+        let mock_user_repo = MockUserRepository::new();
+
         let item = Item {
             id: "123".to_string(),
             name: "test item".to_string(),
@@ -134,6 +138,7 @@ mod tests {
             Arc::new(Config::default()),
             Arc::new(Repository {
                 item: Arc::new(mock_item_repo),
+                user: Arc::new(mock_user_repo),
             }),
         );
 
@@ -148,6 +153,8 @@ mod tests {
     #[tokio::test]
     async fn test_list_items() {
         let mut mock_item_repo = MockItemRepository::new();
+        let mock_user_repo = MockUserRepository::new();
+
         let items = vec![
             Item {
                 id: "1".to_string(),
@@ -169,6 +176,7 @@ mod tests {
             Arc::new(Config::default()),
             Arc::new(Repository {
                 item: Arc::new(mock_item_repo),
+                user: Arc::new(mock_user_repo),
             }),
         );
 
@@ -181,6 +189,8 @@ mod tests {
     #[tokio::test]
     async fn test_update_item() {
         let mut mock_item_repo = MockItemRepository::new();
+        let mock_user_repo = MockUserRepository::new();
+
         let item = Item {
             id: "123".to_string(),
             name: "updated item".to_string(),
@@ -199,6 +209,7 @@ mod tests {
             Arc::new(Config::default()),
             Arc::new(Repository {
                 item: Arc::new(mock_item_repo),
+                user: Arc::new(mock_user_repo),
             }),
         );
 
@@ -213,6 +224,8 @@ mod tests {
     #[tokio::test]
     async fn test_delete_item() {
         let mut mock_item_repo = MockItemRepository::new();
+        let mock_user_repo = MockUserRepository::new();
+
         mock_item_repo
             .expect_delete()
             .withf(|id| id == "123")
@@ -222,6 +235,7 @@ mod tests {
             Arc::new(Config::default()),
             Arc::new(Repository {
                 item: Arc::new(mock_item_repo),
+                user: Arc::new(mock_user_repo),
             }),
         );
 

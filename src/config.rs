@@ -8,6 +8,7 @@ pub struct Config {
     pub app_name: String,
     pub host: IpAddr,
     pub port: u16,
+    pub database_url: String,
 }
 
 impl Default for Config {
@@ -16,6 +17,7 @@ impl Default for Config {
             app_name: "my_app".into(),
             host: Ipv4Addr::new(0, 0, 0, 0).into(),
             port: 3000,
+            database_url: "".into(),
         }
     }
 }
@@ -24,20 +26,22 @@ impl Config {
     pub fn new() -> Self {
         let default = Self::default();
 
-        let app_name = env::var("APP_NAME").unwrap_or(default.app_name);
+        let app_name = env::var("APP_NAME").unwrap_or_default();
         let host = env::var("HOST")
-            .unwrap_or(default.host.to_string())
+            .unwrap_or_default()
             .parse::<IpAddr>()
             .unwrap_or(default.host);
         let port = env::var("PORT")
-            .unwrap_or(default.port.to_string())
+            .unwrap_or_default()
             .parse::<u16>()
-            .unwrap_or(default.port);
+            .unwrap_or_default();
+        let database_url = env::var("DATABASE_URL").unwrap_or_default();
 
         Self {
             host,
             port,
             app_name,
+            database_url,
         }
     }
 
