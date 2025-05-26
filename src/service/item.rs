@@ -8,17 +8,16 @@ use crate::{
         error::{AppError, AppErrorCode},
         item::Item,
     },
-    repository::item::ItemRepository,
+    repository::Repository,
 };
 
-pub struct ItemService<R: ItemRepository> {
-    pub config: Arc<Config>,
-    repo: Arc<R>,
+pub struct ItemService {
+    repo: Arc<Repository>,
 }
 
-impl<R: ItemRepository> ItemService<R> {
-    pub fn new(config: Arc<Config>, repo: Arc<R>) -> Self {
-        ItemService { config, repo }
+impl ItemService {
+    pub fn new(_: Arc<Config>, repo: Arc<Repository>) -> Self {
+        Self { repo }
     }
 
     pub async fn get(&self, id: String) -> Result<Item, AppError> {
@@ -29,11 +28,11 @@ impl<R: ItemRepository> ItemService<R> {
                 message: "Item ID cannot be empty".to_string(),
             });
         }
-        self.repo.get(id).await
+        self.repo.item.get(id).await
     }
 
     pub async fn list(&self) -> Result<Vec<Item>, AppError> {
-        self.repo.list().await
+        self.repo.item.list().await
     }
 
     pub async fn create(&self, name: String) -> Result<Item, AppError> {
@@ -49,7 +48,7 @@ impl<R: ItemRepository> ItemService<R> {
             id: Uuid::new_v4().to_string(),
             name,
         };
-        self.repo.add(new_item).await
+        self.repo.item.add(new_item).await
     }
 
     pub async fn update(&self, id: String, name: String) -> Result<Item, AppError> {
@@ -69,7 +68,7 @@ impl<R: ItemRepository> ItemService<R> {
             });
         }
 
-        self.repo.update(id, name).await
+        self.repo.item.update(id, name).await
     }
 
     pub async fn delete(&self, id: String) -> Result<(), AppError> {
@@ -81,6 +80,6 @@ impl<R: ItemRepository> ItemService<R> {
             });
         }
 
-        self.repo.delete(id).await
+        self.repo.item.delete(id).await
     }
 }
