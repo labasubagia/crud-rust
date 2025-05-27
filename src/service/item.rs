@@ -12,11 +12,11 @@ use crate::{
 };
 
 pub struct ItemService {
-    repo: Arc<Repository>,
+    repo: Arc<dyn Repository>,
 }
 
 impl ItemService {
-    pub fn new(_: Arc<Config>, repo: Arc<Repository>) -> Self {
+    pub fn new(_: Arc<Config>, repo: Arc<dyn Repository>) -> Self {
         Self { repo }
     }
 
@@ -28,11 +28,11 @@ impl ItemService {
                 message: "Item ID cannot be empty".to_string(),
             });
         }
-        self.repo.item.get(id).await
+        self.repo.item().get(id).await
     }
 
     pub async fn list(&self) -> Result<Vec<Item>, AppError> {
-        self.repo.item.list().await
+        self.repo.item().list().await
     }
 
     pub async fn create(&self, name: String) -> Result<Item, AppError> {
@@ -48,7 +48,7 @@ impl ItemService {
             id: Uuid::new_v4().to_string(),
             name,
         };
-        self.repo.item.add(new_item).await
+        self.repo.item().add(new_item).await
     }
 
     pub async fn update(&self, id: String, name: String) -> Result<Item, AppError> {
@@ -68,7 +68,7 @@ impl ItemService {
             });
         }
 
-        self.repo.item.update(id, name).await
+        self.repo.item().update(id, name).await
     }
 
     pub async fn delete(&self, id: String) -> Result<(), AppError> {
@@ -80,15 +80,29 @@ impl ItemService {
             });
         }
 
-        self.repo.item.delete(id).await
+        self.repo.item().delete(id).await
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::repository::item::MockItemRepository;
+    use crate::repository::{
+        item::MockItemRepository, registry::MockPostgresRepository, user::MockUserRepository,
+    };
 
     use super::*;
+
+    fn make_service(mock_item_repo: Arc<MockItemRepository>) -> ItemService {
+        let mock_user_repo = Arc::new(MockUserRepository::new());
+        let mut mock_repo = MockPostgresRepository::new();
+        mock_repo
+            .expect_user()
+            .returning(move || mock_user_repo.clone());
+        mock_repo
+            .expect_item()
+            .returning(move || mock_item_repo.clone());
+        ItemService::new(Arc::new(Config::default()), Arc::new(mock_repo))
+    }
 
     #[tokio::test]
     async fn test_create_item() {
@@ -99,13 +113,7 @@ mod tests {
             .withf(|item: &Item| item.name == "test item")
             .returning(|item| Box::pin(async move { Ok(item) }));
 
-        let service = ItemService::new(
-            Arc::new(Config::default()),
-            Arc::new(Repository {
-                item: Arc::new(mock_item_repo),
-            }),
-        );
-
+        let service = make_service(Arc::new(mock_item_repo));
         let item = service
             .create("Test Item".to_string())
             .await
@@ -116,6 +124,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_item() {
         let mut mock_item_repo = MockItemRepository::new();
+
         let item = Item {
             id: "123".to_string(),
             name: "test item".to_string(),
@@ -130,12 +139,7 @@ mod tests {
                 })
             });
 
-        let service = ItemService::new(
-            Arc::new(Config::default()),
-            Arc::new(Repository {
-                item: Arc::new(mock_item_repo),
-            }),
-        );
+        let service = make_service(Arc::new(mock_item_repo));
 
         let fetched_item = service
             .get("123".to_string())
@@ -148,6 +152,7 @@ mod tests {
     #[tokio::test]
     async fn test_list_items() {
         let mut mock_item_repo = MockItemRepository::new();
+
         let items = vec![
             Item {
                 id: "1".to_string(),
@@ -164,13 +169,7 @@ mod tests {
                 async move { Ok(value.clone()) }
             })
         });
-
-        let service = ItemService::new(
-            Arc::new(Config::default()),
-            Arc::new(Repository {
-                item: Arc::new(mock_item_repo),
-            }),
-        );
+        let service = make_service(Arc::new(mock_item_repo));
 
         let fetched_items = service.list().await.expect("failed to list items");
         assert_eq!(fetched_items.len(), 2);
@@ -181,6 +180,7 @@ mod tests {
     #[tokio::test]
     async fn test_update_item() {
         let mut mock_item_repo = MockItemRepository::new();
+
         let item = Item {
             id: "123".to_string(),
             name: "updated item".to_string(),
@@ -195,12 +195,7 @@ mod tests {
                 })
             });
 
-        let service = ItemService::new(
-            Arc::new(Config::default()),
-            Arc::new(Repository {
-                item: Arc::new(mock_item_repo),
-            }),
-        );
+        let service = make_service(Arc::new(mock_item_repo));
 
         let updated_item = service
             .update("123".to_string(), "Updated Item".to_string())
@@ -213,17 +208,13 @@ mod tests {
     #[tokio::test]
     async fn test_delete_item() {
         let mut mock_item_repo = MockItemRepository::new();
+
         mock_item_repo
             .expect_delete()
             .withf(|id| id == "123")
             .returning(move |_| Box::pin(async move { Ok(()) }));
 
-        let service = ItemService::new(
-            Arc::new(Config::default()),
-            Arc::new(Repository {
-                item: Arc::new(mock_item_repo),
-            }),
-        );
+        let service = make_service(Arc::new(mock_item_repo));
 
         let result = service.delete("123".to_string()).await;
         assert!(result.is_ok());

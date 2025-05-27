@@ -8,10 +8,28 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  DATABASE_URL: postgres://postgres:${{ secrets.DATABASE_PASSWORD }}@localhost:5432/crud_rust
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ${{ secrets.DATABASE_PASSWORD }}
+          POSTGRES_DB: crud_rust
+        ports:
+          - 5432:5432
+        # Health checks to ensure postgres has started before running tests
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+          
     steps:
     - uses: actions/checkout@v4
     
@@ -30,12 +48,18 @@ jobs:
       with:
         path: target
         key: ${{ runner.os }}-cargo-build-${{ hashFiles('**/Cargo.lock', 'src/**') }}
+        
+    - name: Setup Goose
+      uses: mscno/setup-goose@v1
+
+    - name: Run Goose migrations
+      run: goose -dir ./migrations postgres "$DATABASE_URL" up
 
     - name: Clippy
-      run: cargo clippy --verbose
+      run: cargo clippy
     
     - name: Build
-      run: cargo build --verbose
+      run: cargo build
     
     - name: Run tests
-      run: cargo test --verbose
+      run: cargo test

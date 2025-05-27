@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use sqlx::PgPool;
 use std::sync::Mutex;
 
 use crate::model::{
@@ -132,5 +133,105 @@ impl ItemRepository for InMemoryItemRepository {
                 message: "Failed to lock items".to_string(),
             }),
         }
+    }
+}
+
+pub struct PostgresItemRepository {
+    db: PgPool,
+}
+
+impl PostgresItemRepository {
+    pub fn new(db: PgPool) -> Self {
+        Self { db }
+    }
+}
+
+#[async_trait]
+impl ItemRepository for PostgresItemRepository {
+    async fn add(&self, item: Item) -> Result<Item, AppError> {
+        let row = sqlx::query_as!(
+            Item,
+            r#"
+                INSERT INTO items (id, name)
+                VALUES ($1, $2)
+                ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
+                RETURNING id, name
+            "#,
+            item.id,
+            item.name
+        )
+        .fetch_one(&self.db)
+        .await
+        .map_err(|e| AppError {
+            code: AppErrorCode::InternalError(e.to_string()),
+            message: "Failed to upsert item".to_string(),
+        })?;
+        Ok(row)
+    }
+
+    async fn list(&self) -> Result<Vec<Item>, AppError> {
+        let rows = sqlx::query_as!(Item, r#"SELECT id, name FROM items ORDER BY name ASC"#)
+            .fetch_all(&self.db)
+            .await
+            .map_err(|e| AppError {
+                code: AppErrorCode::InternalError(e.to_string()),
+                message: "Failed to fetch items".to_string(),
+            })?;
+        Ok(rows)
+    }
+
+    async fn get(&self, id: &str) -> Result<Item, AppError> {
+        let row = sqlx::query_as!(Item, r#"SELECT id, name FROM items WHERE id = $1"#, id)
+            .fetch_optional(&self.db)
+            .await
+            .map_err(|e| AppError {
+                code: AppErrorCode::InternalError(e.to_string()),
+                message: "Failed to fetch item".to_string(),
+            })?;
+        match row {
+            Some(row) => Ok(row),
+            None => Err(AppError {
+                code: AppErrorCode::NotFound,
+                message: format!("Item with id {} not found", id),
+            }),
+        }
+    }
+
+    async fn update(&self, id: &str, name: String) -> Result<Item, AppError> {
+        let row = sqlx::query_as!(
+            Item,
+            r#"
+                UPDATE items
+                SET name = $2
+                WHERE id = $1
+                RETURNING id, name
+            "#,
+            id,
+            name
+        )
+        .fetch_optional(&self.db)
+        .await
+        .map_err(|e| AppError {
+            code: AppErrorCode::InternalError(e.to_string()),
+            message: "Failed to update item".to_string(),
+        })?;
+        match row {
+            Some(row) => Ok(row),
+            None => Err(AppError {
+                code: AppErrorCode::NotFound,
+                message: format!("Item with id {} not found", id),
+            }),
+        }
+    }
+
+    async fn delete(&self, id: &str) -> Result<(), AppError> {
+        sqlx::query!("DELETE FROM items WHERE id = $1", id)
+            .execute(&self.db)
+            .await
+            .map_err(|e| AppError {
+                code: AppErrorCode::InternalError(e.to_string()),
+                message: "Failed to delete item".to_string(),
+            })?;
+        Ok(())
     }
 }
