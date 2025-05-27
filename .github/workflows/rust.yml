@@ -8,7 +8,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  DATABASE_URL: postgres://postgres:${{ secrets.DATABASE_PASSWORD }}@localhost:5432/postgres
+  DATABASE_URL: postgres://${{ secrets.DATABASE_USER }}:${{ secrets.DATABASE_PASSWORD }}@localhost:5432/postgres
 
 jobs:
   build:
