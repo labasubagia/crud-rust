@@ -62,6 +62,9 @@ jobs:
         key: ${{ runner.os }}-go-binaries-goose-v3
         restore-keys: |
           ${{ runner.os }}-go-binaries-goose-v3
+
+    - name: Install Goose
+      run: go install github.com/pressly/goose/v3/cmd/goose@latest
     
     - name: Run Goose migrations
       env:
