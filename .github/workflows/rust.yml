@@ -8,7 +8,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  DATABASE_URL: postgres://${{ secrets.DATABASE_USER }}:${{ secrets.DATABASE_PASSWORD }}@localhost:5432/postgres
+  DATABASE_URL: postgres://${{ secrets.DATABASE_USER }}:${{ secrets.DATABASE_PASSWORD }}@localhost:5432/crud_rust
 
 jobs:
   build:
@@ -20,7 +20,7 @@ jobs:
         env:
           POSTGRES_USER: ${{ secrets.DATABASE_USER}}
           POSTGRES_PASSWORD: ${{ secrets.DATABASE_PASSWORD }}
-          POSTGRES_DB: postgres
+          POSTGRES_DB: crud_rust
         ports:
           - 5432:5432
         # Health checks to ensure postgres has started before running tests
@@ -54,26 +54,26 @@ jobs:
       with:
         go-version: '1.24'
         cache: true
-    
+
     - name: Cache Go binaries
       uses: actions/cache@v3
       with:
         path: ~/go/bin
-        key: ${{ runner.os }}-go-binaries-goose-v3-${{ hashFiles('.github/workflows/rust.yml') }}
+        key: ${{ runner.os }}-go-binaries-goose-v3
         restore-keys: |
-          ${{ runner.os }}-go-binaries-goose-v3-
-    
+          ${{ runner.os }}-go-binaries-goose-v3
+
     - name: Install Goose (Go version)
       run: go install github.com/pressly/goose/v3/cmd/goose@latest
     
     - name: Run migrations with Goose
-      run: goose -dir ./migrations postgres "postgres://${{ secrets.DATABASE_USER }}:${{ secrets.DATABASE_PASSWORD }}@localhost:5432/postgres" up
+      run: goose -dir ./migrations postgres "${DATABASE_URL}" up
 
     - name: Clippy
-      run: cargo clippy --verbose
+      run: cargo clippy
     
     - name: Build
-      run: cargo build --verbose
+      run: cargo build
     
     - name: Run tests
-      run: cargo test --verbose
+      run: cargo test
