@@ -68,7 +68,7 @@ jobs:
         DB_USER: ${{ secrets.DATABASE_USER }}
         DB_PASS: ${{ secrets.DATABASE_PASSWORD }}
       run: |
-        DATABASE_URL="postgres://${DB_USER}:${DB_PASS}@localhost:5432/postgres?sslmode=disable"
+        DATABASE_URL="postgres://${DB_USER}:${DB_PASS}@localhost:5432/crud_rust?sslmode=disable"
         echo "Using DATABASE_URL=$DATABASE_URL"
         goose -dir ./migrations postgres "$DATABASE_URL" up
 
