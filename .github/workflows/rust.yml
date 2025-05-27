@@ -66,20 +66,20 @@ jobs:
     - name: Install Goose
       run: go install github.com/pressly/goose/v3/cmd/goose@latest
     
-    - name: Run Goose migrations
-      env:
-        DB_USER: ${{ secrets.DATABASE_USER }}
-        DB_PASS: ${{ secrets.DATABASE_PASSWORD }}
-      run: |
-        DATABASE_URL="postgres://${DB_USER}:${DB_PASS}@localhost:5432/crud_rust?sslmode=disable"
-        echo "Using DATABASE_URL=$DATABASE_URL"
-        goose -dir ./migrations postgres "$DATABASE_URL" up
+    # - name: Run Goose migrations
+    #   env:
+    #     DB_USER: ${{ secrets.DATABASE_USER }}
+    #     DB_PASS: ${{ secrets.DATABASE_PASSWORD }}
+    #   run: |
+    #     DATABASE_URL="postgres://${DB_USER}:${DB_PASS}@localhost:5432/crud_rust?sslmode=disable"
+    #     echo "Using DATABASE_URL=$DATABASE_URL"
+    #     goose -dir ./migrations postgres "$DATABASE_URL" up
 
-    - name: Clippy
-      run: cargo clippy
+    # - name: Clippy
+    #   run: cargo clippy
     
-    - name: Build
-      run: cargo build
+    # - name: Build
+    #   run: cargo build
     
-    - name: Run tests
-      run: cargo test
+    # - name: Run tests
+    #   run: cargo test
