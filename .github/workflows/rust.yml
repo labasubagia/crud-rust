@@ -18,7 +18,7 @@ jobs:
       postgres:
         image: postgres:17
         env:
-          POSTGRES_USER: ${{ secrets.DATABASE_USER}}
+          POSTGRES_USER: ${{ secrets.DATABASE_USER }}
           POSTGRES_PASSWORD: ${{ secrets.DATABASE_PASSWORD }}
           POSTGRES_DB: crud_rust
         ports:
@@ -67,7 +67,7 @@ jobs:
       run: go install github.com/pressly/goose/v3/cmd/goose@latest
     
     - name: Run migrations with Goose
-      run: goose -dir ./migrations postgres "${DATABASE_URL}" up
+      run: goose -dir ./migrations postgres "${{ env.DATABASE_URL }}" up
 
     - name: Clippy
       run: cargo clippy
