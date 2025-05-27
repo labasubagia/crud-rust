@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use sqlx::PgPool;
 
 use crate::model::{
     error::{AppError, AppErrorCode},
@@ -15,95 +16,60 @@ pub trait UserRepository: Send + Sync {
     async fn delete(&self, id: &str) -> Result<(), AppError>;
 }
 
-pub struct PostgresUserRepository<'e, E>
-where
-    E: sqlx::Executor<'e, Database = sqlx::Postgres> + Send + Sync + Copy,
-{
-    pub executor: E,
-    _marker: std::marker::PhantomData<&'e ()>,
+pub struct PostgresUserRepository {
+    db: PgPool,
 }
 
-impl<'e, E> PostgresUserRepository<'e, E>
-where
-    E: sqlx::Executor<'e, Database = sqlx::Postgres> + Send + Sync + Copy,
-{
-    pub fn new(executor: E) -> Self {
-        Self {
-            executor,
-            _marker: std::marker::PhantomData,
-        }
+impl PostgresUserRepository {
+    pub fn new(db: PgPool) -> Self {
+        Self { db }
     }
 }
 
 #[async_trait]
-impl<'e, E> UserRepository for PostgresUserRepository<'e, E>
-where
-    E: sqlx::Executor<'e, Database = sqlx::Postgres> + Send + Sync + Copy,
-{
+impl UserRepository for PostgresUserRepository {
     async fn add(&self, user: User) -> Result<User, AppError> {
-        use sqlx::Row;
-        let query = r#"
-            INSERT INTO users (id, email)
-            VALUES ($1, $2)
-            ON CONFLICT (id) DO UPDATE SET email = EXCLUDED.email
-            RETURNING id, email
-        "#;
-        let row = sqlx::query(query)
-            .bind(&user.id)
-            .bind(&user.email)
-            .fetch_one(self.executor)
-            .await
-            .map_err(|e| AppError {
-                code: AppErrorCode::InternalError(e.to_string()),
-                message: "Failed to upsert user".to_string(),
-            })?;
-        Ok(User {
-            id: row.try_get("id").unwrap_or_default(),
-            email: row.try_get("email").unwrap_or_default(),
-            ..user
-        })
+        let row = sqlx::query_as!(
+            User,
+            r#"
+                INSERT INTO users (id, email)
+                VALUES ($1, $2)
+                ON CONFLICT (email) DO UPDATE SET email = EXCLUDED.email
+                RETURNING id, email
+            "#,
+            user.id,
+            user.email,
+        )
+        .fetch_one(&self.db)
+        .await
+        .map_err(|e| AppError {
+            code: AppErrorCode::InternalError(e.to_string()),
+            message: "Failed to upsert user".to_string(),
+        })?;
+        Ok(row)
     }
 
     async fn list(&self) -> Result<Vec<User>, AppError> {
-        use sqlx::Row;
-        let query = r#"
-            SELECT id, email FROM users
-        "#;
-        let rows = sqlx::query(query)
-            .fetch_all(self.executor)
+        let rows = sqlx::query_as!(User, r#"SELECT id, email FROM users ORDER BY email ASC"#)
+            .fetch_all(&self.db)
             .await
             .map_err(|e| AppError {
                 code: AppErrorCode::InternalError(e.to_string()),
                 message: "Failed to fetch users".to_string(),
             })?;
-        let users = rows
-            .into_iter()
-            .map(|row| User {
-                id: row.try_get("id").unwrap_or_default(),
-                email: row.try_get("email").unwrap_or_default(),
-            })
-            .collect();
-        Ok(users)
+        Ok(rows)
     }
 
     async fn get(&self, id: &str) -> Result<User, AppError> {
-        use sqlx::Row;
-        let query = r#"
-            SELECT id, email FROM users WHERE id = $1
-        "#;
-        let row = sqlx::query(query)
-            .bind(id)
-            .fetch_optional(self.executor)
+        let row = sqlx::query_as!(User, r#"SELECT id, email FROM users WHERE id = $1"#, id)
+            .fetch_optional(&self.db)
             .await
             .map_err(|e| AppError {
                 code: AppErrorCode::InternalError(e.to_string()),
                 message: "Failed to fetch user".to_string(),
             })?;
         match row {
-            Some(row) => Ok(User {
-                id: row.try_get("id").unwrap_or_default(),
-                email: row.try_get("email").unwrap_or_default(),
-            }),
+            Some(row) => Ok(row),
             None => Err(AppError {
                 code: AppErrorCode::NotFound,
                 message: format!("User with id {} not found", id),
@@ -112,27 +78,25 @@ where
     }
 
     async fn update(&self, id: &str, email: String) -> Result<User, AppError> {
-        use sqlx::Row;
-        let query = r#"
-            UPDATE users
-            SET email = $2
-            WHERE id = $1
-            RETURNING id, email
-        "#;
-        let row = sqlx::query(query)
-            .bind(id)
-            .bind(&email)
-            .fetch_optional(self.executor)
-            .await
-            .map_err(|e| AppError {
-                code: AppErrorCode::InternalError(e.to_string()),
-                message: "Failed to update user".to_string(),
-            })?;
+        let row = sqlx::query_as!(
+            User,
+            r#"
+                UPDATE users
+                SET email = $2
+                WHERE id = $1
+                RETURNING id, email
+            "#,
+            id,
+            email
+        )
+        .fetch_optional(&self.db)
+        .await
+        .map_err(|e| AppError {
+            code: AppErrorCode::InternalError(e.to_string()),
+            message: "Failed to update user".to_string(),
+        })?;
         match row {
-            Some(row) => Ok(User {
-                id: row.try_get("id").unwrap_or_default(),
-                email: row.try_get("email").unwrap_or_default(),
-            }),
+            Some(row) => Ok(row),
             None => Err(AppError {
                 code: AppErrorCode::NotFound,
                 message: format!("User with id {} not found", id),
@@ -141,12 +105,8 @@ where
     }
 
     async fn delete(&self, id: &str) -> Result<(), AppError> {
-        let query = r#"
-            DELETE FROM users WHERE id = $1
-        "#;
-        sqlx::query(query)
-            .bind(id)
-            .execute(self.executor)
+        sqlx::query!(r#"DELETE FROM users WHERE id = $1"#, id)
+            .execute(&self.db)
             .await
             .map_err(|e| AppError {
                 code: AppErrorCode::InternalError(e.to_string()),

@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use sqlx::PgPool;
 use std::sync::Mutex;
 
 use crate::model::{
@@ -135,95 +136,60 @@ impl ItemRepository for InMemoryItemRepository {
     }
 }
 
-pub struct PostgresItemRepository<'e, E>
-where
-    E: sqlx::Executor<'e, Database = sqlx::Postgres> + Send + Sync + Copy,
-{
-    pub executor: E,
-    _marker: std::marker::PhantomData<&'e ()>,
+pub struct PostgresItemRepository {
+    db: PgPool,
 }
 
-impl<'e, E> PostgresItemRepository<'e, E>
-where
-    E: sqlx::Executor<'e, Database = sqlx::Postgres> + Send + Sync + Copy,
-{
-    pub fn new(executor: E) -> Self {
-        Self {
-            executor,
-            _marker: std::marker::PhantomData,
-        }
+impl PostgresItemRepository {
+    pub fn new(db: PgPool) -> Self {
+        Self { db }
     }
 }
 
 #[async_trait]
-impl<'e, E> ItemRepository for PostgresItemRepository<'e, E>
-where
-    E: sqlx::Executor<'e, Database = sqlx::Postgres> + Send + Sync + Copy,
-{
+impl ItemRepository for PostgresItemRepository {
     async fn add(&self, item: Item) -> Result<Item, AppError> {
-        use sqlx::Row;
-        let query = r#"
-            INSERT INTO items (id, name)
-            VALUES ($1, $2)
-            ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name
-            RETURNING id, name
-        "#;
-        let row = sqlx::query(query)
-            .bind(&item.id)
-            .bind(&item.name)
-            .fetch_one(self.executor)
-            .await
-            .map_err(|e| AppError {
-                code: AppErrorCode::InternalError(e.to_string()),
-                message: "Failed to upsert item".to_string(),
-            })?;
-        Ok(Item {
-            id: row.try_get("id").unwrap_or_default(),
-            name: row.try_get("name").unwrap_or_default(),
-            ..item
-        })
+        let row = sqlx::query_as!(
+            Item,
+            r#"
+                INSERT INTO items (id, name)
+                VALUES ($1, $2)
+                ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
+                RETURNING id, name
+            "#,
+            item.id,
+            item.name
+        )
+        .fetch_one(&self.db)
+        .await
+        .map_err(|e| AppError {
+            code: AppErrorCode::InternalError(e.to_string()),
+            message: "Failed to upsert item".to_string(),
+        })?;
+        Ok(row)
     }
 
     async fn list(&self) -> Result<Vec<Item>, AppError> {
-        use sqlx::Row;
-        let query = r#"
-            SELECT id, name FROM items
-        "#;
-        let rows = sqlx::query(query)
-            .fetch_all(self.executor)
+        let rows = sqlx::query_as!(Item, r#"SELECT id, name FROM items ORDER BY name ASC"#)
+            .fetch_all(&self.db)
             .await
             .map_err(|e| AppError {
                 code: AppErrorCode::InternalError(e.to_string()),
                 message: "Failed to fetch items".to_string(),
             })?;
-        let items = rows
-            .into_iter()
-            .map(|row| Item {
-                id: row.try_get("id").unwrap_or_default(),
-                name: row.try_get("name").unwrap_or_default(),
-            })
-            .collect();
-        Ok(items)
+        Ok(rows)
     }
 
     async fn get(&self, id: &str) -> Result<Item, AppError> {
-        use sqlx::Row;
-        let query = r#"
-            SELECT id, name FROM items WHERE id = $1
-        "#;
-        let row = sqlx::query(query)
-            .bind(id)
-            .fetch_optional(self.executor)
+        let row = sqlx::query_as!(Item, r#"SELECT id, name FROM items WHERE id = $1"#, id)
+            .fetch_optional(&self.db)
             .await
             .map_err(|e| AppError {
                 code: AppErrorCode::InternalError(e.to_string()),
                 message: "Failed to fetch item".to_string(),
             })?;
         match row {
-            Some(row) => Ok(Item {
-                id: row.try_get("id").unwrap_or_default(),
-                name: row.try_get("name").unwrap_or_default(),
-            }),
+            Some(row) => Ok(row),
             None => Err(AppError {
                 code: AppErrorCode::NotFound,
                 message: format!("Item with id {} not found", id),
@@ -232,27 +198,25 @@ where
     }
 
     async fn update(&self, id: &str, name: String) -> Result<Item, AppError> {
-        use sqlx::Row;
-        let query = r#"
-            UPDATE items
-            SET name = $2
-            WHERE id = $1
-            RETURNING id, name
-        "#;
-        let row = sqlx::query(query)
-            .bind(id)
-            .bind(&name)
-            .fetch_optional(self.executor)
-            .await
-            .map_err(|e| AppError {
-                code: AppErrorCode::InternalError(e.to_string()),
-                message: "Failed to update item".to_string(),
-            })?;
+        let row = sqlx::query_as!(
+            Item,
+            r#"
+                UPDATE items
+                SET name = $2
+                WHERE id = $1
+                RETURNING id, name
+            "#,
+            id,
+            name
+        )
+        .fetch_optional(&self.db)
+        .await
+        .map_err(|e| AppError {
+            code: AppErrorCode::InternalError(e.to_string()),
+            message: "Failed to update item".to_string(),
+        })?;
         match row {
-            Some(row) => Ok(Item {
-                id: row.try_get("id").unwrap_or_default(),
-                name: row.try_get("name").unwrap_or_default(),
-            }),
+            Some(row) => Ok(row),
             None => Err(AppError {
                 code: AppErrorCode::NotFound,
                 message: format!("Item with id {} not found", id),
@@ -261,12 +225,8 @@ where
     }
 
     async fn delete(&self, id: &str) -> Result<(), AppError> {
-        let query = r#"
-            DELETE FROM items WHERE id = $1
-        "#;
-        sqlx::query(query)
-            .bind(id)
-            .execute(self.executor)
+        sqlx::query!("DELETE FROM items WHERE id = $1", id)
+            .execute(&self.db)
             .await
             .map_err(|e| AppError {
                 code: AppErrorCode::InternalError(e.to_string()),

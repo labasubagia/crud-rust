@@ -12,7 +12,7 @@ pub struct Service {
 }
 
 impl Service {
-    pub fn new(config: Arc<Config>, repo: Arc<Repository>) -> Self {
+    pub fn new(config: Arc<Config>, repo: Arc<dyn Repository>) -> Self {
         Self {
             config: config.clone(),
             item: ItemService::new(config.clone(), repo.clone()),
