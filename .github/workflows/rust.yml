@@ -8,10 +8,28 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  DATABASE_URL: postgres://postgres:${{ secrets.DATABASE_PASSWORD }}@localhost:5432/postgres
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ${{ secrets.DATABASE_PASSWORD }}
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        # Health checks to ensure postgres has started before running tests
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+          
     steps:
     - uses: actions/checkout@v4
     
@@ -30,6 +48,26 @@ jobs:
       with:
         path: target
         key: ${{ runner.os }}-cargo-build-${{ hashFiles('**/Cargo.lock', 'src/**') }}
+    
+    - name: Setup Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.24'
+        cache: true
+    
+    - name: Cache Go binaries
+      uses: actions/cache@v3
+      with:
+        path: ~/go/bin
+        key: ${{ runner.os }}-go-binaries-goose-v3-${{ hashFiles('.github/workflows/rust.yml') }}
+        restore-keys: |
+          ${{ runner.os }}-go-binaries-goose-v3-
+    
+    - name: Install Goose (Go version)
+      run: go install github.com/pressly/goose/v3/cmd/goose@latest
+    
+    - name: Run migrations with Goose
+      run: goose -dir ./migrations postgres "${DATABASE_URL}" up
 
     - name: Clippy
       run: cargo clippy --verbose
