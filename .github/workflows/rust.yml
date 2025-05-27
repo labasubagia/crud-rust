@@ -67,7 +67,9 @@ jobs:
       run: go install github.com/pressly/goose/v3/cmd/goose@latest
     
     - name: Run migrations with Goose
-      run: goose -dir ./migrations postgres ${{ env.DATABASE_URL }} up
+      env:
+        DATABASE_URL: postgres://${{ secrets.DATABASE_USER }}:${{ secrets.DATABASE_PASSWORD }}@localhost:5432/crud_rust
+      run: goose -dir ./migrations postgres $DATABASE_URL up
 
     - name: Clippy
       run: cargo clippy
