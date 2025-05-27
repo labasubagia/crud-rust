@@ -58,6 +58,9 @@ jobs:
     - name: Setup Goose
       uses: mscno/setup-goose@v1
 
+    - name: Run Goose migrations
+      run: goose -dir ./migrations postgres "$DATABASE_URL" up
+
     - name: Clippy
       run: cargo clippy
     
