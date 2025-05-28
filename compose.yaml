@@ -61,6 +61,52 @@ services:
         condition: service_healthy
       migration:
         condition: service_completed_successfully
+    volumes:
+      - cargo_target:/app/target
+    healthcheck:
+      test: ["CMD", "curl", "${HOST}:${PORT}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    command: cargo run
+    develop:
+      watch:
+        - path: ./src
+          target: /app/src
+          action: sync+restart
+        - path: ./Cargo.toml
+          action: rebuild
+        - path: ./Cargo.lock
+          action: rebuild
+    
+  migration:
+    image: kukymbr/goose-docker:3.24.2
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      - GOOSE_DRIVER=postgres
+      - GOOSE_DBSTRING=host=db port=5432 user=postgres password=secret dbname=crud_rust sslmode=disable
+    volumes:
+      - ./migrations:/migrations
+
+  app:
+    user: app
+    build: 
+      context: .
+      dockerfile: infra/watch.Dockerfile
+    ports:
+      - 3000:3000
+    environment:
+      APP_NAME: crud
+      HOST: 0.0.0.0
+      PORT: 3000
+      DATABASE_URL: postgres://postgres:secret@db:5432/crud_rust
+    depends_on:
+      db:
+        condition: service_healthy
+      migration:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "curl", "${HOST}:${PORT}"]
       interval: 10s
@@ -79,3 +125,4 @@ services:
     
 volumes:
   db_data:
+  cargo_target:
