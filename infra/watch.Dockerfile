@@ -1,6 +1,6 @@
 # Run as a non-privileged user
-FROM rust:1.87
-RUN useradd -ms /bin/sh -u 1001 app
+FROM rust:1.87-alpine
+RUN adduser -D -u 1001 -s /bin/sh app
 USER app
 
 # Install dependencies
