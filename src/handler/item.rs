@@ -32,7 +32,7 @@ async fn list_items(
     State(state): State<Arc<AppState>>,
     Extension(correlation_id): Extension<CorrelationId>,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    match state.service.item.list().await {
+    match state.service.list_item().await {
         Ok(items) => (
             StatusCode::OK,
             Json(json!(Response::<Vec<Item>> {
@@ -59,7 +59,7 @@ async fn create_item(
     Extension(correlation_id): Extension<CorrelationId>,
     Json(payload): Json<CreateItem>,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    match state.service.item.create(payload.name).await {
+    match state.service.create_item(payload.name).await {
         Ok(item) => (
             StatusCode::CREATED,
             Json(json!(Response::<Item> {
@@ -86,7 +86,7 @@ async fn get_item(
     Extension(correlation_id): Extension<CorrelationId>,
     axum::extract::Path(id): axum::extract::Path<String>,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    match state.service.item.get(id).await {
+    match state.service.get_item(id).await {
         Ok(item) => (
             StatusCode::OK,
             Json(json!(Response::<Item> {
@@ -114,7 +114,7 @@ async fn update_item(
     axum::extract::Path(id): axum::extract::Path<String>,
     Json(payload): Json<UpdateItem>,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    match state.service.item.update(id, payload.name.clone()).await {
+    match state.service.update_item(id, payload.name.clone()).await {
         Ok(item) => (
             StatusCode::OK,
             Json(json!(Response::<Item> {
@@ -141,7 +141,7 @@ async fn delete_item(
     Extension(correlation_id): Extension<CorrelationId>,
     axum::extract::Path(id): axum::extract::Path<String>,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    match state.service.item.delete(id.clone()).await {
+    match state.service.delete_item(id.clone()).await {
         Ok(_) => (
             StatusCode::OK,
             Json(json!(Response::<serde_json::Value> {

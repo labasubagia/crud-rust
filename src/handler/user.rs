@@ -27,7 +27,7 @@ async fn add_user(
     Extension(correlation_id): Extension<CorrelationId>,
     Json(payload): Json<CreateUser>,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    match state.service.user.add(payload).await {
+    match state.service.add_user(payload).await {
         Ok(user) => (
             StatusCode::CREATED,
             Json(json!(Response::<User> {
@@ -53,7 +53,7 @@ async fn list_users(
     State(state): State<Arc<AppState>>,
     Extension(correlation_id): Extension<CorrelationId>,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    match state.service.user.list().await {
+    match state.service.list_user().await {
         Ok(users) => (
             StatusCode::OK,
             Json(json!(Response::<Vec<User>> {
@@ -79,7 +79,7 @@ async fn get_user(
     Extension(correlation_id): Extension<CorrelationId>,
     axum::extract::Path(id): axum::extract::Path<String>,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    match state.service.user.get(&id).await {
+    match state.service.get_user(&id).await {
         Ok(user) => (
             StatusCode::OK,
             Json(json!(Response::<User> {
@@ -107,7 +107,7 @@ async fn update_user(
     axum::extract::Path(id): axum::extract::Path<String>,
     Json(payload): Json<UpdateUser>,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    match state.service.user.update(&id, payload).await {
+    match state.service.update_user(&id, payload).await {
         Ok(user) => (
             StatusCode::OK,
             Json(json!(Response::<User> {
@@ -134,7 +134,7 @@ async fn delete_user(
     Extension(correlation_id): Extension<CorrelationId>,
     axum::extract::Path(id): axum::extract::Path<String>,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    match state.service.user.delete(&id).await {
+    match state.service.delete_user(&id).await {
         Ok(_) => (
             StatusCode::OK,
             Json(json!(Response::<serde_json::Value> {

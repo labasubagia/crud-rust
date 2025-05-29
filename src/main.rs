@@ -11,7 +11,7 @@ use crud_rust::{
     handler::{item::router_setup_items, user::router_setup_users},
     middleware::{CorrelationId, request_middleware},
     model::http::Response,
-    repository::PostgresRepository,
+    repository::{PostgresRepository, Repository},
     service::Service,
     state::AppState,
 };
@@ -38,7 +38,7 @@ async fn main() {
         }
     };
 
-    let repo = Arc::new(PostgresRepository::new(pool.clone()));
+    let repo: Arc<dyn Repository> = Arc::new(PostgresRepository::new(pool.clone()));
     let service = Arc::new(Service::new(config.clone(), repo.clone()));
 
     let app_state = Arc::new(AppState {
