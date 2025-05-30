@@ -32,7 +32,20 @@ jobs:
           
     steps:
     - uses: actions/checkout@v4
-    
+
+    - name: Cache mold
+      uses: actions/cache@v3
+      with:
+        path: /usr/bin/mold
+        key: ${{ runner.os }}-mold-${{ hashFiles('.github/workflows/rust.yml') }}
+
+    - name: Install mold
+      run: |
+        if ! command -v mold &> /dev/null; then
+          sudo apt-get update
+          sudo apt-get install -y mold
+        fi
+
     - name: Cache dependencies
       uses: actions/cache@v3
       with:
