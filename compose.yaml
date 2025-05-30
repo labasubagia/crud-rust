@@ -16,6 +16,12 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+    
 
   adminer:
     image: adminer:5
@@ -32,6 +38,11 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 128M
 
   migration:
     image: kukymbr/goose-docker:3.24.2
@@ -43,6 +54,11 @@ services:
       - GOOSE_DBSTRING=host=db port=5432 user=postgres password=secret dbname=crud_rust sslmode=disable
     volumes:
       - ./migrations:/migrations
+    deploy:
+      resources:
+        limits:
+          cpus: '0.1'
+          memory: 32M
 
   app:
     user: app
@@ -80,7 +96,12 @@ services:
         - path: ./Cargo.lock
           target: /app/Cargo.lock
           action: sync+restart
-    
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+
 volumes:
   db_data:
   cargo_target:

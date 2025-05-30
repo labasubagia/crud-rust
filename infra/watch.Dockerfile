@@ -13,5 +13,7 @@ RUN cargo fetch
 # Clean up dummy src to avoid conflict with real code
 RUN rm -rf src
 
+RUN mkdir -p target && chown -R app:app target
+
 # Copy source files into application directory
 COPY --chown=app:app . /app
