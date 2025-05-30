@@ -22,7 +22,6 @@ services:
           cpus: '0.5'
           memory: 256M
     
-
   adminer:
     image: adminer:5
     restart: always
@@ -79,11 +78,6 @@ services:
         condition: service_completed_successfully
     volumes:
       - cargo_target:/app/target
-    healthcheck:
-      test: ["CMD", "curl", "${HOST}:${PORT}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
     command: cargo run
     develop:
       watch:
@@ -96,11 +90,6 @@ services:
         - path: ./Cargo.lock
           target: /app/Cargo.lock
           action: sync+restart
-    deploy:
-      resources:
-        limits:
-          cpus: '1.0'
-          memory: 512M
 
 volumes:
   db_data:
