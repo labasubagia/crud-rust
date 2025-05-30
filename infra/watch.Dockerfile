@@ -1,5 +1,9 @@
-# Run as a non-privileged user
 FROM rust:1.87
+
+# Add mold for faster builds
+RUN apt-get update && apt-get install -y mold
+
+# Run as a non-privileged user
 RUN useradd -ms /bin/sh -u 1001 app
 USER app
 
@@ -13,6 +17,7 @@ RUN cargo fetch
 # Clean up dummy src to avoid conflict with real code
 RUN rm -rf src
 
+# Create target with correct permissions
 RUN mkdir -p target && chown -R app:app target
 
 # Copy source files into application directory
